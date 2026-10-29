@@ -80,22 +80,26 @@ impl BytePacketBuffer {
         let max_jumps = 5;
         let mut jumps_performed = 0;
         loop {
-            // Dns Packets are untrusted data, so we need to be paranoid. Someone
-            // can craft a packet with a cycle in the jump instructions. This guards
-            // against such packets.
+            // Les paquets DNS sont des données non fiables : il faut donc être
+            // paranoïaque. Quelqu'un pourrait fabriquer un paquet dont les
+            // instructions de saut forment une boucle sans fin. Ce test protège
+            // contre ce type de paquet.
             if jumps_performed > max_jumps {
                 return Err(format!("Limit of {} jumps exceeded", max_jumps).into());
             }
 
             let len = self.get(pos)?;
 
-            // A two byte sequence, where the two highest bits of the first byte is
-            // set, represents a offset relative to the start of the buffer. We
-            // handle this by jumping to the offset, setting a flag to indicate
-            // that we shouldn't update the shared buffer position once done.
+            // Une séquence de deux octets dont les deux bits de poids fort du
+            // premier octet sont à 1 représente une position (offset) comptée
+            // depuis le début du tampon. On la traite en sautant à cette
+            // position, et en levant un indicateur qui signale qu'il ne faudra
+            // pas mettre à jour la position partagée du tampon une fois
+            // terminé.
             if (len & 0xC0) == 0xC0 {
-                // When a jump is performed, we only modify the shared buffer
-                // position once, and avoid making the change later on.
+                // Lors d'un saut, on ne modifie la position partagée du tampon
+                // qu'une seule fois, et on évite de la modifier de nouveau par
+                // la suite.
                 if !jumped {
                     self.seek(pos + 2)?;
                 }
@@ -110,7 +114,7 @@ impl BytePacketBuffer {
 
             pos += 1;
 
-            // Names are terminated by an empty label of length 0
+            // Les noms se terminent par un label vide de longueur 0
             if len == 0 {
                 break;
             }
@@ -287,7 +291,9 @@ impl DnsHeader {
         self.authoritative_entries = buffer.read_u16()?;
         self.resource_entries = buffer.read_u16()?;
 
-        // Return the constant header size
+        // N.d.T. : commentaire d'origine obsolète (« renvoie la taille
+        // constante de l'en-tête »). La fonction se termine aujourd'hui
+        // simplement par Ok(()), qui signifie « tout s'est bien passé ».
         Ok(())
     }
 
@@ -367,7 +373,7 @@ impl DnsQuestion {
     pub fn read(&mut self, buffer: &mut BytePacketBuffer) -> Result<()> {
         buffer.read_qname(&mut self.name)?;
         self.qtype = QueryType::from_num(buffer.read_u16()?); // qtype
-        let _ = buffer.read_u16()?; // class
+        let _ = buffer.read_u16()?; // classe
 
         Ok(())
     }

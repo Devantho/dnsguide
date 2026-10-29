@@ -1,82 +1,159 @@
-1 - The DNS protocol
+1 - Le protocole DNS
 ====================
 
-We'll start out by investigating the DNS protocol and use our knowledge thereof
-to implement a simple client.
+> **Note du traducteur — À quoi sert le DNS ?**
+>
+> Sur Internet, les machines se reconnaissent par des **adresses IP** (par
+> exemple `216.58.211.142`), un peu comme des coordonnées cadastrales. Les
+> humains, eux, retiennent des **noms** (`google.com`). Le DNS (*Domain Name
+> System*, « système de noms de domaine ») est l'annuaire qui fait la
+> correspondance entre les deux. Chaque fois que vous tapez une adresse dans un
+> navigateur, votre ordinateur pose une question à un serveur DNS (« quelle est
+> l'adresse IP de google.com ? ») et reçoit une réponse. Ce chapitre décortique
+> le format exact de ces questions et de ces réponses ; c'est le plus technique
+> du guide, ne vous découragez pas.
 
-Conventionally, DNS packets are sent using UDP transport and are limited to 512
-bytes. As we'll see later, both of those rules have exceptions: DNS can be used
-over TCP as well, and using a mechanism known as eDNS we can extend the packet
-size. For now, we'll stick to the original specification, though.
+Nous commencerons par étudier le protocole DNS, puis nous utiliserons ces
+connaissances pour programmer un client simple.
 
-DNS is quite convenient in the sense that queries and responses use the same
-format. This means that once we've written a packet parser and a packet writer,
-our protocol work is done. This differs from most Internet Protocols, which
-typically use different request and response structures. On a high level, a DNS
-packet looks as follows:
+Par convention, les paquets DNS sont transportés par UDP et limités à 512
+octets. Comme nous le verrons plus tard, ces deux règles ont des exceptions : le
+DNS peut aussi fonctionner sur TCP, et un mécanisme appelé eDNS permet
+d'augmenter la taille des paquets. Pour l'instant, nous nous en tiendrons
+toutefois à la spécification d'origine.
 
-| Section            | Size     | Type              | Purpose                                                                                                |
-| ------------------ | -------- | ----------------- | ------------------------------------------------------------------------------------------------------ |
-| Header             | 12 Bytes | Header            | Information about the query/response.                                                                  |
-| Question Section   | Variable | List of Questions | In practice only a single question indicating the query name (domain) and the record type of interest. |
-| Answer Section     | Variable | List of Records   | The relevant records of the requested type.                                                            |
-| Authority Section  | Variable | List of Records   | A list of name servers (NS records), used for resolving queries recursively.                          |
-| Additional Section | Variable | List of Records   | Additional records, that might be useful. For instance, the corresponding A records for NS records.    |
+> **Note du traducteur — Paquet, octet, UDP, TCP**
+>
+> - Un **paquet** est un message envoyé d'une machine à une autre sur le
+>   réseau : une suite de valeurs numériques.
+> - Un **octet** (*byte* en anglais) est l'unité de base de ces messages : un
+>   nombre compris entre 0 et 255, codé sur 8 **bits** (8 chiffres binaires,
+>   valant 0 ou 1). 512 octets, c'est très peu : environ une demi-page de texte.
+> - **UDP** et **TCP** sont deux façons d'acheminer ces paquets. UDP fonctionne
+>   comme une carte postale : on l'envoie sans connexion préalable et sans
+>   garantie de réception. TCP ressemble plutôt à un appel téléphonique : on
+>   établit une connexion, puis l'échange est fiable et ordonné. Le DNS utilise
+>   UDP par défaut, car c'est plus rapide pour un échange court
+>   question/réponse.
 
-Essentially, we have to support three different objects: Header, Question and
-Record. Conveniently, the lists of records and questions are simply individual
-instances appended in a row, with no extras. The number of records in each
-section is provided by the header. The header structure looks as follows:
+Le DNS a l'avantage d'utiliser le même format pour les requêtes et pour les
+réponses. Cela signifie qu'une fois écrits un module qui lit les paquets (un
+*parser*, ou analyseur) et un module qui les écrit, notre travail sur le
+protocole est terminé. C'est différent de la plupart des protocoles Internet,
+qui utilisent généralement des structures distinctes pour la requête et pour la
+réponse. Vu de haut, un paquet DNS se présente ainsi :
 
-| RFC Name | Descriptive Name     | Length             | Description                                                                                                                                                                         |
-| -------- | -------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ID       | Packet Identifier    | 16 bits            | A random identifier is assigned to query packets. Response packets must reply with the same id. This is needed to differentiate responses due to the stateless nature of UDP.       |
-| QR       | Query Response       | 1 bit              | 0 for queries, 1 for responses.                                                                                                                                                     |
-| OPCODE   | Operation Code       | 4 bits             | Typically always 0, see RFC1035 for details.                                                                                                                                        |
-| AA       | Authoritative Answer | 1 bit              | Set to 1 if the responding server is authoritative - that is, it "owns" - the domain queried.                                                                                       |
-| TC       | Truncated Message    | 1 bit              | Set to 1 if the message length exceeds 512 bytes. Traditionally a hint that the query can be reissued using TCP, for which the length limitation doesn't apply.                     |
-| RD       | Recursion Desired    | 1 bit              | Set by the sender of the request if the server should attempt to resolve the query recursively if it does not have an answer readily available.                                     |
-| RA       | Recursion Available  | 1 bit              | Set by the server to indicate whether or not recursive queries are allowed.                                                                                                         |
-| Z        | Reserved             | 3 bits             | Originally reserved for later use, but now used for DNSSEC queries.                                                                                                                 |
-| RCODE    | Response Code        | 4 bits             | Set by the server to indicate the status of the response, i.e. whether or not it was successful or failed, and in the latter case providing details about the cause of the failure. |
-| QDCOUNT  | Question Count       | 16 bits            | The number of entries in the Question Section                                                                                                                                       |
-| ANCOUNT  | Answer Count         | 16 bits            | The number of entries in the Answer Section                                                                                                                                         |
-| NSCOUNT  | Authority Count      | 16 bits            | The number of entries in the Authority Section                                                                                                                                      |
-| ARCOUNT  | Additional Count     | 16 bits            | The number of entries in the Additional Section                                                                                                                                     |
+| Section                                       | Taille    | Type                    | Rôle                                                                                                                     |
+| --------------------------------------------- | --------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Header (en-tête)                              | 12 octets | En-tête                 | Informations sur la requête/réponse.                                                                                     |
+| Question Section (section Question)           | Variable  | Liste de questions      | En pratique, une seule question, qui indique le nom demandé (le domaine) et le type d'enregistrement recherché.          |
+| Answer Section (section Réponse)              | Variable  | Liste d'enregistrements | Les enregistrements correspondant au type demandé.                                                                       |
+| Authority Section (section Autorité)          | Variable  | Liste d'enregistrements | Une liste de serveurs de noms (enregistrements NS), utilisée pour résoudre les requêtes de manière récursive.            |
+| Additional Section (section Additionnelle)    | Variable  | Liste d'enregistrements | Des enregistrements supplémentaires, potentiellement utiles. Par exemple, les enregistrements A correspondant aux NS.    |
 
-The question is quite a bit less scary:
+> **Note du traducteur — « Enregistrement »**
+>
+> Un **enregistrement** (*record*, ou *resource record*) est une ligne de
+> l'annuaire DNS : « tel nom → telle information ». Il en existe plusieurs
+> types : le type **A** associe un nom à une adresse IP, le type **NS** indique
+> quel serveur gère un domaine, etc. Le chapitre 3 en présente plusieurs.
 
-| Field  | Type           | Description                                                          |
-| ------ | -------------- | -------------------------------------------------------------------- |
-| Name   | Label Sequence | The domain name, encoded as a sequence of labels as described below. |
-| Type   | 2-byte Integer | The record type.                                                     |
-| Class  | 2-byte Integer | The class, in practice always set to 1.                              |
+Concrètement, nous devons gérer trois objets différents : l'en-tête (*Header*),
+la question (*Question*) et l'enregistrement (*Record*). Fort heureusement, les
+listes d'enregistrements et de questions sont simplement des éléments
+individuels placés les uns à la suite des autres, sans rien de plus. Le nombre
+d'enregistrements de chaque section est indiqué dans l'en-tête. La structure de
+l'en-tête est la suivante :
 
-The tricky part lies in the encoding of the domain name, which we'll return to
-later.
+| Nom RFC  | Nom descriptif                                  | Longueur | Description                                                                                                                                                                              |
+| -------- | ----------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ID       | Packet Identifier (identifiant du paquet)       | 16 bits  | Un identifiant aléatoire est attribué aux paquets de requête. Les paquets de réponse doivent reprendre le même identifiant. C'est nécessaire pour distinguer les réponses, car UDP est sans état (il ne garde aucune trace des échanges). |
+| QR       | Query Response (requête/réponse)                | 1 bit    | 0 pour une requête, 1 pour une réponse.                                                                                                                                                  |
+| OPCODE   | Operation Code (code d'opération)               | 4 bits   | En pratique toujours 0 ; voir la RFC 1035 pour le détail.                                                                                                                                |
+| AA       | Authoritative Answer (réponse faisant autorité) | 1 bit    | Vaut 1 si le serveur qui répond fait autorité pour le domaine demandé, c'est-à-dire qu'il en est « propriétaire ».                                                                       |
+| TC       | Truncated Message (message tronqué)             | 1 bit    | Vaut 1 si la taille du message dépasse 512 octets. Indique traditionnellement que la requête peut être renvoyée en TCP, où cette limite ne s'applique pas.                               |
+| RD       | Recursion Desired (récursion souhaitée)         | 1 bit    | Positionné par l'émetteur de la requête s'il souhaite que le serveur tente une résolution récursive lorsqu'il ne dispose pas directement de la réponse.                                  |
+| RA       | Recursion Available (récursion disponible)      | 1 bit    | Positionné par le serveur pour indiquer s'il accepte ou non les requêtes récursives.                                                                                                     |
+| Z        | Reserved (réservé)                              | 3 bits   | Réservé à l'origine pour un usage futur, désormais utilisé pour les requêtes DNSSEC.                                                                                                     |
+| RCODE    | Response Code (code de réponse)                 | 4 bits   | Positionné par le serveur pour indiquer le statut de la réponse : succès ou échec, et dans ce dernier cas, la cause de l'échec.                                                           |
+| QDCOUNT  | Question Count (nombre de questions)            | 16 bits  | Nombre d'entrées dans la section Question.                                                                                                                                               |
+| ANCOUNT  | Answer Count (nombre de réponses)               | 16 bits  | Nombre d'entrées dans la section Réponse.                                                                                                                                                |
+| NSCOUNT  | Authority Count (nombre d'autorités)            | 16 bits  | Nombre d'entrées dans la section Autorité.                                                                                                                                               |
+| ARCOUNT  | Additional Count (nombre d'additionnels)        | 16 bits  | Nombre d'entrées dans la section Additionnelle.                                                                                                                                          |
 
-Finally, we've got the records which are the meat of the protocol. Many record
-types exists, but for now we'll only consider a few essential. All records have
-the following preamble:
+> **Note du traducteur — Lire ce tableau**
+>
+> - Une **RFC** (*Request For Comments*) est un document de normalisation
+>   d'Internet, l'équivalent d'une norme dans le bâtiment. La RFC 1035 (1987)
+>   est le texte de référence du DNS.
+> - Les champs d'1 bit sont des **drapeaux** (*flags*) : de simples cases à
+>   cocher, 0 = non, 1 = oui.
+> - L'en-tête fait 12 octets, soit 96 bits. Le total de la colonne
+>   « Longueur » donne bien 16 + 1 + 4 + 1 + 1 + 1 + 1 + 3 + 4 + 4 × 16 = 96 :
+>   tout est rangé bit à bit, sans aucun espace perdu.
+> - **Récursion** : un serveur qui accepte la récursion se charge d'aller
+>   chercher lui-même la réponse auprès d'autres serveurs si nécessaire, au lieu
+>   de vous renvoyer vers eux. Le chapitre 5 détaille ce mécanisme.
+> - **DNSSEC** est une extension de sécurité du DNS (signature des réponses),
+>   qui n'est pas traitée dans ce guide.
 
-| Field  | Type           | Description                                                                       |
-| ------ | -------------- | --------------------------------------------------------------------------------- |
-| Name   | Label Sequence | The domain name, encoded as a sequence of labels as described below.              |
-| Type   | 2-byte Integer | The record type.                                                                  |
-| Class  | 2-byte Integer | The class, in practice always set to 1.                                           |
-| TTL    | 4-byte Integer | Time-To-Live, i.e. how long a record can be cached before it should be requeried. |
-| Len    | 2-byte Integer | Length of the record type specific data.                                          |
+La question est nettement moins intimidante :
 
-Now we are all set to look a specific record types, and we'll start with the
-most essential: the A record, mapping a name to an ip.
+| Champ          | Type                | Description                                                                         |
+| -------------- | ------------------- | ----------------------------------------------------------------------------------- |
+| Name (nom)     | Séquence de labels  | Le nom de domaine, encodé sous forme de séquence de labels, comme décrit plus bas.  |
+| Type           | Entier sur 2 octets | Le type d'enregistrement.                                                           |
+| Class (classe) | Entier sur 2 octets | La classe ; en pratique toujours égale à 1.                                         |
 
-| Field      | Type            | Description                                                                       |
-| ---------- | --------------- | --------------------------------------------------------------------------------- |
-| Preamble   | Record Preamble | The record preamble, as described above, with the length field set to 4.          |
-| IP         | 4-byte Integer  | An IP-address encoded as a four byte integer.                                      |
+La difficulté réside dans l'encodage du nom de domaine, sur lequel nous
+reviendrons plus loin.
 
-Having gotten this far, let's get a feel for this in practice by performing
-a lookup using the `dig` tool:
+Viennent enfin les enregistrements, qui constituent le cœur du protocole. Il
+existe de nombreux types d'enregistrements, mais pour l'instant nous n'en
+étudierons que quelques-uns, essentiels. Tous les enregistrements commencent par
+le préambule suivant :
+
+| Champ          | Type                | Description                                                                                                       |
+| -------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Name (nom)     | Séquence de labels  | Le nom de domaine, encodé sous forme de séquence de labels, comme décrit plus bas.                                |
+| Type           | Entier sur 2 octets | Le type d'enregistrement.                                                                                         |
+| Class (classe) | Entier sur 2 octets | La classe ; en pratique toujours égale à 1.                                                                       |
+| TTL            | Entier sur 4 octets | *Time-To-Live* (durée de vie) : durée pendant laquelle un enregistrement peut être gardé en cache avant d'être redemandé. |
+| Len            | Entier sur 2 octets | Longueur des données propres au type d'enregistrement.                                                            |
+
+> **Note du traducteur — Cache et TTL**
+>
+> Un **cache** est une mémoire temporaire : plutôt que de reposer la même
+> question à chaque fois, un serveur garde la réponse sous le coude pendant une
+> durée limitée, le **TTL**, exprimé en secondes. Un TTL de 300 signifie
+> « cette information reste valable 5 minutes ».
+
+Nous voilà prêts à examiner des types d'enregistrement précis, en commençant par
+le plus essentiel : l'enregistrement A, qui associe un nom à une adresse IP.
+
+| Champ                 | Type                         | Description                                                            |
+| --------------------- | ---------------------------- | ---------------------------------------------------------------------- |
+| Preamble (préambule)  | Préambule d'enregistrement   | Le préambule décrit ci-dessus, avec le champ de longueur égal à 4.     |
+| IP                    | Entier sur 4 octets          | Une adresse IP encodée sous forme d'entier sur quatre octets.          |
+
+> **N.d.T.** — Une adresse IPv4 comme `216.58.211.142` est justement composée
+> de quatre nombres de 0 à 255 : chacun tient dans un octet, d'où les 4 octets.
+
+Arrivés à ce stade, voyons concrètement comment cela fonctionne en effectuant
+une recherche avec l'outil `dig` :
+
+> **Note du traducteur — Les blocs de commandes**
+>
+> Dans les blocs ci-dessous, la ligne qui commence par `#` est la commande
+> tapée dans un terminal (le `#` symbolise l'invite de commande, il ne faut pas
+> le recopier) ; les lignes suivantes sont ce que la commande affiche. `dig` est
+> un outil en ligne de commande qui interroge un serveur DNS et affiche la
+> réponse en détail ; les lignes qui commencent par `;` sont des commentaires
+> ajoutés par `dig` pour la lisibilité. Ces sorties sont laissées telles
+> quelles, en anglais, puisque c'est ce que vous verrez à l'écran.
+>
+> Les adresses IP, TTL et dates affichées datent de la rédaction originale du
+> guide (2016) : vous obtiendrez des valeurs différentes aujourd'hui.
 
 ```text
 # dig +noedns google.com
@@ -99,34 +176,55 @@ google.com.             204     IN      A       172.217.18.142
 ;; MSG SIZE  rcvd: 44
 ```
 
-We're using the `+noedns` flag to make sure we stick to the original format.
-There are a few things of note in the output above:
+Nous utilisons l'option `+noedns` pour nous assurer de rester sur le format
+d'origine. Plusieurs points sont à remarquer dans la sortie ci-dessus :
 
- * We can see that `dig` explicitly describes the header, question and answer
-   sections of the response packet.
- * The header is using the OPCODE QUERY which corresponds to 0. The status
-   (RESCODE) is set to NOERROR, which is 0 numerically. The id is 36383, and
-   will change randomly with repeated queries. The Query Response (qr),
-   Recursion Desired (rd), Recursion Available (ra) flags are enabled, which are 
-   1 numerically. We can ignore `ad` for now, since it relates to DNSSEC. Finally, 
-   the header tells us that there is one question and one answer record.
- * The question section shows us our question, with the `IN` indicating the
-   class, and A telling us that we're performing a query for A records.
- * The answer section contains the answer record, with google's IP. `204` is the
-   TTL, IN is again the class, and A is the record type. Finally, we've got the
-   google.com IP-address.
- * The final line tells us that the total packet size was 44 bytes.
+ * On voit que `dig` décrit explicitement l'en-tête (`HEADER`), la section
+   Question (`QUESTION SECTION`) et la section Réponse (`ANSWER SECTION`) du
+   paquet de réponse.
+ * L'en-tête utilise l'OPCODE QUERY, qui correspond à 0. Le statut (RESCODE)
+   vaut NOERROR, soit 0 numériquement. L'identifiant (id) est 36383 et changera
+   aléatoirement d'une requête à l'autre. Les drapeaux Query Response (qr),
+   Recursion Desired (rd) et Recursion Available (ra) sont activés,
+   c'est-à-dire égaux à 1. Nous pouvons ignorer `ad` pour l'instant, car il
+   concerne DNSSEC. Enfin, l'en-tête nous indique qu'il y a une question et un
+   enregistrement de réponse.
+ * La section Question nous montre notre question : `IN` indique la classe, et
+   A nous dit que nous demandons des enregistrements de type A.
+ * La section Réponse contient l'enregistrement de réponse, avec l'adresse IP de
+   Google. `204` est le TTL, IN est à nouveau la classe et A le type
+   d'enregistrement. On trouve enfin l'adresse IP de google.com.
+ * La dernière ligne nous apprend que la taille totale du paquet était de 44
+   octets.
 
-There are still some details obscured from view here though, so let's dive
-deeper still and look at a hexdump of the packets. We can use `netcat` to listen
-on a port, and then direct `dig` to send the query there. In one terminal
-window we run:
+> **N.d.T.** — `IN` signifie *Internet* : c'est la classe n° 1, la seule utilisée
+> en pratique. Le « RESCODE » mentionné par l'auteur désigne le champ RCODE de
+> l'en-tête (le code de réponse).
+
+Certains détails restent toutefois cachés ; plongeons donc plus profondément et
+examinons un vidage hexadécimal (*hexdump*) des paquets. Nous pouvons utiliser
+`netcat` pour écouter sur un port, puis demander à `dig` d'y envoyer sa
+requête. Dans une première fenêtre de terminal, on lance :
+
+> **Note du traducteur — Port, netcat, hexdump**
+>
+> - Un **port** est un numéro de « guichet » sur une machine : une même machine
+>   peut héberger plusieurs services, chacun à l'écoute sur son propre port. Le
+>   DNS utilise le port 53.
+> - `netcat` (commande `nc`) permet d'envoyer ou de recevoir des données brutes
+>   sur le réseau. Ici, on l'utilise comme un faux serveur qui enregistre dans
+>   un fichier tout ce qu'il reçoit.
+> - `hexdump` affiche le contenu brut d'un fichier, octet par octet, en
+>   hexadécimal (voir plus bas).
+> - Ces outils sont disponibles nativement sous Linux et macOS. Sous Windows, le
+>   plus simple est d'utiliser WSL (le sous-système Linux de Windows). La
+>   syntaxe exacte de `nc` peut varier légèrement selon la version installée.
 
 ```text
 # nc -u -l 1053 > query_packet.txt
 ```
 
-Then in another window, do:
+Puis, dans une autre fenêtre :
 
 ```text
 # dig +retry=0 -p 1053 @127.0.0.1 +noedns google.com
@@ -137,17 +235,22 @@ Then in another window, do:
 ;; connection timed out; no servers could be reached
 ```
 
-The failure is expected in this case, since `dig` will timeout when it doesn't
-receive a response. Since this fails, it exits. At this point `netcat` can be
-exited using Ctrl+C. We're left with a query packet in `query_packet.txt`. We can use our
-query packet to record a response packet as well:
+L'échec est normal dans ce cas : `dig` abandonne au bout d'un certain temps
+(*timeout*) faute de recevoir une réponse, puis se termine. On peut alors
+quitter `netcat` avec Ctrl+C. Il nous reste un paquet de requête dans
+`query_packet.txt`. Nous pouvons nous servir de ce paquet pour enregistrer
+également un paquet de réponse :
 
 ```text
 # nc -u 8.8.8.8 53 < query_packet.txt > response_packet.txt
 ```
 
-Give it a second, and then cancel using Ctrl+C. We are now ready to inspect our
-packets:
+> **N.d.T.** — Cette commande envoie le contenu de `query_packet.txt` au serveur
+> DNS public de Google (`8.8.8.8`, port 53) et enregistre sa réponse dans
+> `response_packet.txt`.
+
+Patientez une seconde, puis interrompez avec Ctrl+C. Nous sommes maintenant
+prêts à examiner nos paquets :
 
 ```text
 # hexdump -C query_packet.txt
@@ -161,18 +264,48 @@ packets:
 0000002c
 ```
 
-Let's see if we can make some sense of this. We know from earlier that the
-header is 12 bytes long. For the query packet, the header bytes are:
-`86 2a 01 20 00 01 00 00 00 00 00 00` We can see that the last eight bytes
-corresponds to the length of the different sections, with the only one actually
-having any content being the question section which holds a single entry. The
-most interesting part are the first four bytes, which corresponds to the
-different fields of the header. First off, we know that we got a 2-byte
-id, which is supposed to stay the same for both query and answer. Indeed we
-see that in this example it's set to `86 2a` in both hexdumps. The hard part
-to parse are the remaining two bytes. In order to make sense of them, we'll have
-to convert them to binary. Starting with the `01 20` of the query packet, we
-find (with the Most Significant Bit first):
+> **Note du traducteur — Lire de l'hexadécimal**
+>
+> L'**hexadécimal** (base 16) utilise 16 chiffres : `0` à `9`, puis `a` (10),
+> `b` (11), `c` (12), `d` (13), `e` (14) et `f` (15). Deux chiffres
+> hexadécimaux décrivent exactement un octet, de `00` (0) à `ff` (255). Par
+> exemple, `2a` = 2 × 16 + 10 = 42. On écrit souvent `0x` devant un nombre pour
+> signaler qu'il est en hexadécimal : `0x2a`.
+>
+> Chaque ligne d'un *hexdump* se lit ainsi :
+>
+> - la première colonne (`00000000`, `00000010`…) est la position du premier
+>   octet de la ligne, elle-même en hexadécimal (`10` = 16) ;
+> - viennent ensuite 16 octets, en deux groupes de 8 ;
+> - la colonne entre `|…|` montre les mêmes octets interprétés comme du texte
+>   (un `.` quand l'octet ne correspond à aucun caractère imprimable). C'est
+>   pour cela qu'on y voit apparaître `google` et `com`.
+
+Essayons d'y voir clair. Nous savons que l'en-tête fait 12 octets. Pour le
+paquet de requête, les octets de l'en-tête sont :
+`86 2a 01 20 00 01 00 00 00 00 00 00`. On constate que les huit derniers octets
+correspondent aux nombres d'entrées des différentes sections ; la seule à avoir
+un contenu est la section Question, qui contient une seule entrée. La partie la
+plus intéressante, ce sont les quatre premiers octets, qui correspondent aux
+différents champs de l'en-tête. Tout d'abord, nous savons que nous avons un
+identifiant sur 2 octets, censé rester le même dans la requête et dans la
+réponse. On voit effectivement que dans cet exemple, il vaut `86 2a` dans les
+deux *hexdumps*. Le plus difficile à décoder, ce sont les deux octets restants.
+Pour les interpréter, il faut les convertir en binaire. En commençant par le
+`01 20` du paquet de requête, on obtient (bit de poids fort en premier) :
+
+> **Note du traducteur — De l'hexadécimal au binaire**
+>
+> Chaque chiffre hexadécimal correspond exactement à 4 bits : `0` = `0000`,
+> `1` = `0001`, `2` = `0010`, … `8` = `1000`, … `c` = `1100`, `f` = `1111`. Il
+> suffit donc de remplacer chaque chiffre par ses 4 bits :
+> `01 20` → `0000 0001  0010 0000`. Le **bit de poids fort** est le bit le plus
+> à gauche, celui qui « pèse » le plus dans la valeur du nombre (comme le chiffre
+> des milliers dans un nombre décimal).
+>
+> Dans le schéma ci-dessous, chaque colonne est un bit ; les lettres écrites
+> verticalement sous les tirets donnent le nom du champ concerné (QR, OPCODE,
+> AA, TC, RD, RA, Z, RCODE).
 
 ```text
 0 0 0 0 0 0 0 1  0 0 1 0 0 0 0 0
@@ -185,13 +318,14 @@ R    P    A C D  A          C
      E
 ```
 
-Except for the DNSSEC related bit in the `Z` section, this is as expected. `QR`
-is 0 since its a Query, `OPCODE` is also 0 since it's a standard lookup, the
-`AA`, `TC` and `RA` flags aren't relevant for queries while `RD` is set, since `dig`
-defaults to requesting recursive lookup. Finally, `RCODE` isn't used for
-queries either.
+Mis à part le bit lié à DNSSEC dans la zone `Z`, c'est conforme aux attentes.
+`QR` vaut 0 puisqu'il s'agit d'une requête ; `OPCODE` vaut aussi 0, puisqu'il
+s'agit d'une recherche standard ; les drapeaux `AA`, `TC` et `RA` ne concernent
+pas les requêtes, tandis que `RD` est activé, car `dig` demande par défaut une
+résolution récursive. Enfin, `RCODE` n'est pas non plus utilisé dans les
+requêtes.
 
-Moving on to the flag bytes of the response packet `81 80`:
+Passons aux octets de drapeaux du paquet de réponse, `81 80` :
 
 ```text
 1 0 0 0 0 0 0 1  1 0 0 0 0 0 0 0
@@ -204,58 +338,72 @@ R    P    A C D  A          C
      E
 ```
 
-Since this is a response `QR` is set, and so is `RA` to indicate that the
-server does support recursion. Looking at the remaining eight bytes of the reply,
-we see that in addition to having a single question, we've also got a single
-answer record.
+Comme il s'agit d'une réponse, `QR` est activé, de même que `RA`, pour indiquer
+que le serveur prend bien en charge la récursion. En examinant les huit octets
+restants de la réponse, on constate qu'en plus d'une question, nous avons aussi
+un enregistrement de réponse.
 
-Immediately past the header, we've got the question. Let's break it down byte
-by byte:
+Juste après l'en-tête vient la question. Décortiquons-la octet par octet :
 
 ```text
-                    query name              type   class
+                   nom demandé              type   classe
        -----------------------------------  -----  -----
 HEX    06 67 6f 6f 67 6c 65 03 63 6f 6d 00  00 01  00 01
 ASCII     g  o  o  g  l  e     c  o  m
 DEC    6                    3           0       1      1
 ```
 
-As outlined in the table earlier, it consists of three parts: query name, type
-and class. There's something interesting about how the name is encoded,
-though -- there are no dots present. Rather DNS encodes each name into
-a sequence of `labels`, with each label prepended by a single byte indicating
-its length. In the example above, "google" is 6 bytes and is thus preceded by
-`0x06`, while "com" is 3 bytes and is preceded by `0x03`. Finally, all names
-are terminated by a label of zero length, that is a null byte. Seems easy
-enough, doesn't it? Well, as we shall see soon there's another twist to it.
+> **N.d.T.** — Ligne `HEX` : les octets en hexadécimal. Ligne `ASCII` : le
+> caractère correspondant à chaque octet (l'ASCII est la table standard de
+> correspondance entre nombres et caractères : `67` = `g`, `6f` = `o`…). Ligne
+> `DEC` : la valeur décimale des octets qui représentent des nombres.
 
-We've now reached the end of our query packet, but there is some data left to
-decode in the response packet. The remaining data is a single A record holding
-the corresponding IP address for google.com:
+Comme l'indiquait le tableau plus haut, la question se compose de trois
+parties : le nom demandé, le type et la classe. La façon dont le nom est encodé
+présente toutefois une particularité : il ne contient aucun point. Le DNS encode
+en effet chaque nom sous la forme d'une séquence de `labels`, chaque label étant
+précédé d'un octet unique qui indique sa longueur. Dans l'exemple ci-dessus,
+« google » fait 6 octets et est donc précédé de `0x06`, tandis que « com » fait
+3 octets et est précédé de `0x03`. Enfin, tous les noms se terminent par un
+label de longueur nulle, c'est-à-dire un octet nul. Cela paraît assez simple,
+non ? Eh bien, comme nous allons le voir bientôt, il y a une subtilité
+supplémentaire.
+
+> **N.d.T.** — Un **label** est un morceau du nom de domaine compris entre deux
+> points : `www.google.com` contient les trois labels `www`, `google` et `com`.
+> Le nom est donc stocké sous la forme `[3]www[6]google[3]com[0]`, chaque
+> nombre entre crochets étant un octet de longueur.
+
+Nous avons atteint la fin de notre paquet de requête, mais il reste des données
+à décoder dans le paquet de réponse. Ces données sont un unique enregistrement A
+contenant l'adresse IP de google.com :
 
 ```text
-      name     type   class         ttl        len      ip
+      nom      type   classe        ttl        long.    ip
       ------  ------  ------  --------------  ------  --------------
 HEX   c0  0c  00  01  00  01  00  00  01  25  00  04  d8  3a  d3  8e
 DEC   192 12    1       1           293         4     216 58  211 142
 ```
 
-Most of this is as expected: Type is 1 for `A record`, Class is 1 for `IN`, TTL
-in this case is 293 which seems reasonable, the data length is 4 which is as it
-should, and finally we learn that the IP of google is `216.58.211.142`. What
-then is going on with the name field? Where are the labels we just learned
-about?
+L'essentiel est conforme aux attentes : le type vaut 1 pour un `enregistrement
+A`, la classe vaut 1 pour `IN`, le TTL vaut ici 293, ce qui semble raisonnable,
+la longueur des données vaut 4, comme il se doit, et l'on apprend enfin que
+l'adresse IP de Google est `216.58.211.142`. Mais alors, que se passe-t-il avec
+le champ du nom ? Où sont passés les labels que nous venons de découvrir ?
 
-Due to the original size constraints of DNS, of 512 bytes for a single packet,
-some type of compression was needed. Since most of the space required is for
-the domain names, and part of the same name tends to reoccur, there's some
-obvious space saving opportunity. For example, consider the following DNS
-query:
+> **N.d.T.** — Vérification : `01 25` en hexadécimal = 1 × 256 + 37 = 293 ;
+> `d8` = 216, `3a` = 58, `d3` = 211, `8e` = 142.
+
+En raison de la contrainte de taille d'origine du DNS (512 octets par paquet),
+une forme de compression était nécessaire. Comme l'essentiel de la place est
+occupé par les noms de domaine, et que des morceaux d'un même nom ont tendance à
+se répéter, il y a là une occasion évidente de gagner de la place. Prenons par
+exemple la requête DNS suivante :
 
 ```text
 # dig @a.root-servers.net com
 
-- snip -
+- (coupé) -
 
 ;; AUTHORITY SECTION:
 com.                172800  IN  NS      e.gtld-servers.net.
@@ -289,36 +437,89 @@ k.gtld-servers.net. 172800  IN  A       192.52.178.30
 c.gtld-servers.net. 172800  IN  A       192.26.92.30
 d.gtld-servers.net. 172800  IN  A       192.31.80.30
 
-- snip -
+- (coupé) -
 ```
 
-Here we query one of the internet root servers for the name servers handling
-the .com TLD. Notice how `gtld-servers.net.` keeps reappearing -- wouldn't it
-be convenient if we'd only have to include it once? One way to achieve this is
-to include a "jump directive", telling the packet parser to jump to another
-position, and finish reading the name there. As it turns out, that's exactly
-what we're looking at in our response packet.
+Ici, nous interrogeons l'un des serveurs racine d'Internet pour connaître les
+serveurs de noms qui gèrent le TLD .com. Remarquez comme `gtld-servers.net.`
+revient sans cesse : ne serait-il pas pratique de ne l'inclure qu'une seule
+fois ? Une façon d'y parvenir est d'insérer une « instruction de saut », qui
+indique à l'analyseur de paquets d'aller à une autre position et d'y terminer la
+lecture du nom. Et c'est justement ce que nous avons sous les yeux dans notre
+paquet de réponse.
 
-I mentioned earlier that each label is preceeded by a single byte length. The
-additional thing we need to consider is that if the two Most Significant Bits of
-the length is set, we can instead expect the length byte to be followed by
-a second byte. These two bytes taken together, and removing the two MSB's, indicate
-the jump position. In the example above, we've got `0xC00C`. The bit pattern of
-the the two high bits expressed as hex is `0xC000` (in binary `11000000
-00000000`), so we can find the jump position by xoring our two bytes with this
-mask to unset them: `0xC00C ^ 0xC000 = 12`. Thus we should jump to byte 12 of
-the packet and read from there. Recalling that the length the DNS header
-happens to be 12 bytes, we realize that it's instructing us to start reading
-from where the question part of the packet begins, which makes sense since the
-question starts with the query domain which in this case is "google.com". Once
-we've finished reading the name, we resume parsing where we left off, and move
-on to the record type.
+> **Note du traducteur — Serveurs racine, TLD et instruction de saut**
+>
+> Le DNS est organisé comme une arborescence. Tout en haut, les **serveurs
+> racine** (*root servers*) connaissent les serveurs chargés de chaque **TLD**
+> (*Top-Level Domain*, domaine de premier niveau : `.com`, `.fr`, `.org`…).
+> Ceux-ci connaissent à leur tour les serveurs de chaque domaine
+> (`google.com`), et ainsi de suite. Le chapitre 5 parcourt cette arborescence
+> pas à pas.
+>
+> L'« instruction de saut » fonctionne comme un renvoi dans un document (« voir
+> page 12 ») : au lieu de répéter un texte déjà écrit, on indique où le relire.
+
+J'ai mentionné plus haut que chaque label est précédé d'un octet de longueur. Il
+faut en plus tenir compte du fait suivant : si les deux bits de poids fort de
+cet octet de longueur sont à 1, il faut s'attendre à ce qu'il soit suivi d'un
+second octet. Ces deux octets pris ensemble, une fois leurs deux bits de poids
+fort retirés, indiquent la position du saut. Dans l'exemple ci-dessus, nous
+avons `0xC00C`. Le motif binaire des deux bits de poids fort, exprimé en
+hexadécimal, est `0xC000` (en binaire `11000000 00000000`) ; on peut donc
+trouver la position du saut en appliquant un « ou exclusif » (*XOR*) entre nos
+deux octets et ce masque, pour remettre ces deux bits à zéro :
+`0xC00C ^ 0xC000 = 12`. Il faut donc sauter à l'octet 12 du paquet et lire à
+partir de là. En se rappelant que l'en-tête DNS fait justement 12 octets, on
+comprend que l'instruction nous demande de lire à partir du début de la partie
+Question du paquet. C'est logique, puisque la question commence par le domaine
+demandé, ici « google.com ». Une fois la lecture du nom terminée, on reprend
+l'analyse là où on s'était arrêté, et on passe au type d'enregistrement.
+
+> **Note du traducteur — Le « ou exclusif » (XOR, noté `^`)**
+>
+> Le XOR compare deux nombres bit à bit : le résultat vaut 1 quand les deux bits
+> sont différents, 0 quand ils sont identiques. Avec un masque dont les seuls
+> bits à 1 sont ceux qu'on veut effacer (et dont on sait qu'ils sont à 1), on
+> les remet à 0 sans toucher au reste :
+>
+> ```text
+> 0xC00C = 1100 0000 0000 1100
+> 0xC000 = 1100 0000 0000 0000
+> XOR    = 0000 0000 0000 1100  = 12
+> ```
 
 ### BytePacketBuffer
 
-Now finally we know enough to start implementing! The first order of business is
-that we need some convenient method for manipulating the packets. For this,
-we'll use a `struct` called `BytePacketBuffer`.
+Nous en savons enfin assez pour commencer à programmer ! La première chose à
+faire est de nous doter d'un moyen pratique de manipuler les paquets. Pour cela,
+nous utiliserons une `struct` (structure) appelée `BytePacketBuffer`.
+
+> **Note du traducteur — Lire le code Rust**
+>
+> À partir d'ici, le guide contient beaucoup de code écrit en **Rust**, un
+> langage de programmation. Les commentaires du code (lignes qui commencent par
+> `//` ou `///`) ont été traduits ; les noms de variables et de fonctions sont
+> restés en anglais, car ils font partie du programme. Quelques repères :
+>
+> - `struct` définit une **structure** : une fiche comportant des champs nommés
+>   (ici `buf`, le contenu du paquet, et `pos`, la position de lecture).
+> - `impl` regroupe les **fonctions** (`fn`) qui agissent sur cette structure,
+>   appelées aussi *méthodes*. `self` désigne la structure elle-même.
+> - `u8`, `u16` et `u32` désignent des nombres entiers positifs sur 8, 16 ou 32
+>   bits (1, 2 ou 4 octets). `usize` est un entier qui sert à compter ou à
+>   repérer une position. `[u8; 512]` est un tableau de 512 octets.
+> - `Result<...>` signifie « soit un résultat, soit une erreur ». `Ok(...)`
+>   renvoie le résultat, `Err(...)` renvoie une erreur, et le point
+>   d'interrogation `?` placé après un appel veut dire : « si cet appel a
+>   échoué, on s'arrête là et on transmet l'erreur ».
+> - `<<` et `>>` décalent les bits vers la gauche ou vers la droite ; `|` (ou)
+>   et `&` (et) combinent des bits. Lire les deux octets `0x86` et `0x2a` pour
+>   en faire le nombre `0x862a`, c'est décaler le premier de 8 bits vers la
+>   gauche, puis l'assembler au second avec `|` : c'est exactement ce que fait
+>   `read_u16`.
+> - Le [glossaire](GLOSSAIRE.md) reprend ces notions et les autres termes du
+>   guide.
 
 ```rust
 pub struct BytePacketBuffer {
@@ -328,8 +529,8 @@ pub struct BytePacketBuffer {
 
 impl BytePacketBuffer {
 
-    /// This gives us a fresh buffer for holding the packet contents, and a
-    /// field for keeping track of where we are.
+    /// Crée un tampon (buffer) vierge destiné à contenir le paquet, ainsi qu'un
+    /// champ qui mémorise la position où l'on se trouve.
     pub fn new() -> BytePacketBuffer {
         BytePacketBuffer {
             buf: [0; 512],
@@ -337,26 +538,26 @@ impl BytePacketBuffer {
         }
     }
 
-    /// Current position within buffer
+    /// Position courante dans le tampon
     fn pos(&self) -> usize {
         self.pos
     }
 
-    /// Step the buffer position forward a specific number of steps
+    /// Avance la position dans le tampon d'un nombre de pas donné
     fn step(&mut self, steps: usize) -> Result<()> {
         self.pos += steps;
 
         Ok(())
     }
 
-    /// Change the buffer position
+    /// Modifie la position dans le tampon
     fn seek(&mut self, pos: usize) -> Result<()> {
         self.pos = pos;
 
         Ok(())
     }
 
-    /// Read a single byte and move the position one step forward
+    /// Lit un seul octet et avance la position d'un pas
     fn read(&mut self) -> Result<u8> {
         if self.pos >= 512 {
             return Err("End of buffer".into());
@@ -367,7 +568,7 @@ impl BytePacketBuffer {
         Ok(res)
     }
 
-    /// Get a single byte, without changing the buffer position
+    /// Récupère un seul octet, sans modifier la position dans le tampon
     fn get(&mut self, pos: usize) -> Result<u8> {
         if pos >= 512 {
             return Err("End of buffer".into());
@@ -375,7 +576,7 @@ impl BytePacketBuffer {
         Ok(self.buf[pos])
     }
 
-    /// Get a range of bytes
+    /// Récupère une plage d'octets
     fn get_range(&mut self, start: usize, len: usize) -> Result<&[u8]> {
         if start + len >= 512 {
             return Err("End of buffer".into());
@@ -383,14 +584,14 @@ impl BytePacketBuffer {
         Ok(&self.buf[start..start + len as usize])
     }
 
-    /// Read two bytes, stepping two steps forward
+    /// Lit deux octets et avance de deux pas
     fn read_u16(&mut self) -> Result<u16> {
         let res = ((self.read()? as u16) << 8) | (self.read()? as u16);
 
         Ok(res)
     }
 
-    /// Read four bytes, stepping four steps forward
+    /// Lit quatre octets et avance de quatre pas
     fn read_u32(&mut self) -> Result<u32> {
         let res = ((self.read()? as u32) << 24)
             | ((self.read()? as u32) << 16)
@@ -401,84 +602,86 @@ impl BytePacketBuffer {
     }
 
 
-    /// Read a qname
+    /// Lit un qname (le nom de domaine contenu dans le paquet)
     ///
-    /// The tricky part: Reading domain names, taking labels into consideration.
-    /// Will take something like [3]www[6]google[3]com[0] and append
-    /// www.google.com to outstr.
+    /// La partie délicate : lire les noms de domaine en tenant compte des
+    /// labels. Transforme par exemple [3]www[6]google[3]com[0] en
+    /// www.google.com, qui est ajouté à la fin de outstr.
     fn read_qname(&mut self, outstr: &mut String) -> Result<()> {
-        // Since we might encounter jumps, we'll keep track of our position
-        // locally as opposed to using the position within the struct. This
-        // allows us to move the shared position to a point past our current
-        // qname, while keeping track of our progress on the current qname
-        // using this variable.
+        // Comme nous pouvons rencontrer des sauts, nous suivons notre position
+        // dans une variable locale plutôt que d'utiliser celle de la structure.
+        // Cela permet de placer la position partagée juste après le qname en
+        // cours, tout en continuant à suivre notre progression dans ce qname
+        // grâce à cette variable.
         let mut pos = self.pos();
 
-        // track whether or not we've jumped
+        // indique si nous avons effectué un saut ou non
         let mut jumped = false;
         let max_jumps = 5;
         let mut jumps_performed = 0;
 
-        // Our delimiter which we append for each label. Since we don't want a
-        // dot at the beginning of the domain name we'll leave it empty for now
-        // and set it to "." at the end of the first iteration.
+        // Le séparateur ajouté avant chaque label. Comme on ne veut pas de
+        // point au début du nom de domaine, on le laisse vide pour l'instant et
+        // on le passera à "." à la fin du premier tour de boucle.
         let mut delim = "";
         loop {
-            // Dns Packets are untrusted data, so we need to be paranoid. Someone
-            // can craft a packet with a cycle in the jump instructions. This guards
-            // against such packets.
+            // Les paquets DNS sont des données non fiables : il faut donc être
+            // paranoïaque. Quelqu'un pourrait fabriquer un paquet dont les
+            // instructions de saut forment une boucle sans fin. Ce test protège
+            // contre ce type de paquet.
             if jumps_performed > max_jumps {
                 return Err(format!("Limit of {} jumps exceeded", max_jumps).into());
             }
 
-            // At this point, we're always at the beginning of a label. Recall
-            // that labels start with a length byte.
+            // À ce stade, on se trouve toujours au début d'un label. Pour
+            // rappel, un label commence par un octet qui indique sa longueur.
             let len = self.get(pos)?;
 
-            // If len has the two most significant bit are set, it represents a
-            // jump to some other offset in the packet:
+            // Si les deux bits de poids fort de len sont à 1, il s'agit d'un
+            // saut vers une autre position (offset) du paquet :
             if (len & 0xC0) == 0xC0 {
-                // Update the buffer position to a point past the current
-                // label. We don't need to touch it any further.
+                // On place la position du tampon juste après le label en cours.
+                // Nous n'aurons plus besoin d'y toucher ensuite.
                 if !jumped {
                     self.seek(pos + 2)?;
                 }
 
-                // Read another byte, calculate offset and perform the jump by
-                // updating our local position variable
+                // On lit l'octet suivant, on calcule la position cible (offset)
+                // et on effectue le saut en mettant à jour notre variable de
+                // position locale
                 let b2 = self.get(pos + 1)? as u16;
                 let offset = (((len as u16) ^ 0xC0) << 8) | b2;
                 pos = offset as usize;
 
-                // Indicate that a jump was performed.
+                // On note qu'un saut a été effectué.
                 jumped = true;
                 jumps_performed += 1;
 
                 continue;
             }
-            // The base scenario, where we're reading a single label and
-            // appending it to the output:
+            // Le cas de base : on lit un seul label et on l'ajoute au
+            // résultat :
             else {
-                // Move a single byte forward to move past the length byte.
+                // On avance d'un octet pour dépasser l'octet de longueur.
                 pos += 1;
 
-                // Domain names are terminated by an empty label of length 0,
-                // so if the length is zero we're done.
+                // Les noms de domaine se terminent par un label vide de
+                // longueur 0 : si la longueur vaut zéro, on a terminé.
                 if len == 0 {
                     break;
                 }
 
-                // Append the delimiter to our output buffer first.
+                // On ajoute d'abord le séparateur au résultat.
                 outstr.push_str(delim);
 
-                // Extract the actual ASCII bytes for this label and append them
-                // to the output buffer.
+                // On extrait les octets ASCII (les caractères) de ce label et
+                // on les ajoute au résultat.
                 let str_buffer = self.get_range(pos, len as usize)?;
                 outstr.push_str(&String::from_utf8_lossy(str_buffer).to_lowercase());
 
                 delim = ".";
 
-                // Move forward the full length of the label.
+                // On avance de toute la longueur du label.
                 pos += len as usize;
             }
         }
@@ -492,9 +695,17 @@ impl BytePacketBuffer {
 }
 ```
 
+> **N.d.T.** — Le « tampon » (*buffer*) est simplement une zone mémoire de 512
+> octets qui contient le paquet, avec un curseur (`pos`) qui avance au fil de la
+> lecture, comme un doigt qui suit les lignes d'un texte. La fonction
+> `read_qname` est la plus délicate : elle reconstitue un nom de domaine à
+> partir de ses labels, en suivant les éventuels sauts décrits plus haut, et se
+> protège contre les paquets piégés dont les sauts boucleraient à l'infini.
+
 ### ResultCode
 
-Before we move on to the header, we'll add an enum for the values of `rescode` field:
+Avant de passer à l'en-tête, nous ajoutons une `enum` (énumération) pour les
+valeurs du champ `rescode` :
 
 ```rust
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -521,9 +732,20 @@ impl ResultCode {
 }
 ```
 
+> **N.d.T.** — Une `enum` (énumération) est une liste fermée de valeurs
+> possibles, comme une liste déroulante. Ici, ce sont les codes de réponse du
+> DNS : `NOERROR` (pas d'erreur), `FORMERR` (requête mal formée), `SERVFAIL`
+> (échec du serveur), `NXDOMAIN` (le domaine n'existe pas), `NOTIMP` (opération
+> non prise en charge) et `REFUSED` (requête refusée). La fonction `from_num`
+> convertit le nombre lu dans le paquet en l'une de ces valeurs, à l'aide d'un
+> `match`, c'est-à-dire d'un aiguillage (« si c'est 1, alors… ; si c'est 2,
+> alors… »). La ligne `#[derive(...)]` demande au compilateur de générer
+> automatiquement quelques fonctions standard (copie, comparaison, affichage).
+
 ### DnsHeader
 
-Now we can get to work on the header. We'll represent it like this:
+Nous pouvons maintenant nous attaquer à l'en-tête. Nous le représenterons
+ainsi :
 
 ```rust
 #[derive(Clone, Debug)]
@@ -549,7 +771,17 @@ pub struct DnsHeader {
 }
 ```
 
-The implementation involves a lot of bit twiddling:
+> **N.d.T.** — `bool` (booléen) est une valeur vrai/faux (`true`/`false`),
+> idéale pour représenter un drapeau d'un bit. Les commentaires `// 1 bit`,
+> `// 4 bits`… rappellent la place occupée par chaque champ dans le paquet. Les
+> noms anglais correspondent aux champs du tableau vu plus haut :
+> `recursion_desired` = RD, `truncated_message` = TC, `authoritative_answer` =
+> AA, `opcode` = OPCODE, `response` = QR, `rescode` = RCODE,
+> `recursion_available` = RA ; `checking_disabled`, `authed_data` et `z` se
+> partagent les 3 bits de la zone Z (DNSSEC). Les quatre compteurs de la fin
+> correspondent à QDCOUNT, ANCOUNT, NSCOUNT et ARCOUNT.
+
+L'implémentation comporte beaucoup de manipulations de bits :
 
 ```rust
 impl DnsHeader {
@@ -604,10 +836,19 @@ impl DnsHeader {
 }
 ```
 
+> **Note du traducteur — Ce que fait `read`**
+>
+> La fonction lit les 2 octets de drapeaux d'un seul coup (`flags`), puis les
+> sépare en deux octets : `a` (le premier) et `b` (le second). Pour chaque
+> drapeau, l'expression `(a & (1 << n)) > 0` teste si le bit n° *n* vaut 1 :
+> `1 << n` fabrique un nombre dont seul le bit *n* est à 1, et `&` ne conserve
+> que ce bit. L'OPCODE, qui fait 4 bits, est extrait par décalage (`>> 3`) puis
+> par masquage (`& 0x0F`, qui ne garde que les 4 bits de droite).
+
 ### QueryType
 
-Before moving on to the question part of the packet, we'll need a way to
-represent the record type being queried:
+Avant de passer à la partie Question du paquet, il nous faut un moyen de
+représenter le type d'enregistrement demandé :
 
 ```rust
 #[derive(PartialEq, Eq, Debug, Clone, Hash, Copy)]
@@ -633,10 +874,16 @@ impl QueryType {
 }
 ```
 
+> **N.d.T.** — `UNKNOWN(u16)` (« inconnu ») permet de conserver le numéro d'un
+> type que le programme ne sait pas encore traiter, au lieu de s'arrêter sur une
+> erreur. Pour l'instant, seul le type A (numéro 1) est reconnu. `to_num` et
+> `from_num` convertissent dans les deux sens entre le type et son numéro.
+
 ### DnsQuestion
 
-The enum allows us to easily add more record types later on. Now for the
-question entries:
+L'énumération nous permettra d'ajouter facilement d'autres types
+d'enregistrement par la suite. Passons maintenant aux entrées de la section
+Question :
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -656,20 +903,21 @@ impl DnsQuestion {
     pub fn read(&mut self, buffer: &mut BytePacketBuffer) -> Result<()> {
         buffer.read_qname(&mut self.name)?;
         self.qtype = QueryType::from_num(buffer.read_u16()?); // qtype
-        let _ = buffer.read_u16()?; // class
+        let _ = buffer.read_u16()?; // classe
 
         Ok(())
     }
 }
 ```
 
-Having done the hard part of reading the domain names as part of our
-`BytePacketBuffer` struct, it turns out to be quite compact.
+La partie difficile (la lecture des noms de domaine) étant déjà réglée dans
+notre structure `BytePacketBuffer`, ce code s'avère plutôt compact.
 
 ### DnsRecord
 
-We'll obviously need a way of representing the actual dns records as well, and
-again we'll use an enum for easy expansion:
+Il nous faut évidemment aussi un moyen de représenter les enregistrements DNS
+eux-mêmes, et là encore nous utilisons une énumération pour pouvoir l'étendre
+facilement :
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -689,10 +937,11 @@ pub enum DnsRecord {
 }
 ```
 
-Since there are many types of records, we'll add the ability to keep track of
-record types we haven't yet encountered. The enum will also allow us to easily
-add new records later on. The actual implementation of `DnsRecord` looks like
-this:
+Comme il existe de nombreux types d'enregistrements, nous ajoutons la
+possibilité de garder trace de ceux que nous ne connaissons pas encore.
+L'énumération nous permettra aussi d'ajouter facilement de nouveaux types
+d'enregistrements plus tard. L'implémentation de `DnsRecord` se présente
+ainsi :
 
 ```rust
 impl DnsRecord {
@@ -737,9 +986,16 @@ impl DnsRecord {
 }
 ```
 
+> **N.d.T.** — La fonction lit d'abord le préambule commun (nom, type, classe,
+> TTL, longueur des données), puis agit selon le type : pour un enregistrement
+> A, elle lit les 4 octets de l'adresse IP et les découpe en quatre nombres ;
+> pour un type inconnu, elle saute simplement par-dessus les données
+> (`buffer.step(data_len)`), dont elle connaît la longueur grâce au préambule.
+> `let _ = ...` signifie qu'on lit une valeur (ici la classe) sans la conserver.
+
 ### DnsPacket
 
-Finally, let's put it all together in a struct called `DnsPacket`:
+Enfin, rassemblons le tout dans une structure appelée `DnsPacket` :
 
 ```rust
 #[derive(Clone, Debug)]
@@ -790,9 +1046,16 @@ impl DnsPacket {
 }
 ```
 
-### Putting it all together
+> **N.d.T.** — `Vec<...>` est une liste de longueur variable. `from_buffer` lit
+> l'en-tête, puis exactement le nombre de questions et d'enregistrements annoncé
+> par celui-ci, section par section. Les noms des champs correspondent aux
+> sections du paquet : `questions` (Question), `answers` (Réponse),
+> `authorities` (Autorité) et `resources` (Additionnelle).
 
-Let's use the `response_packet.txt` we generated earlier to try it out!
+### Assemblage final
+
+Utilisons le fichier `response_packet.txt` généré plus haut pour essayer tout
+cela !
 
 ```rust
 fn main() -> Result<()> {
@@ -820,7 +1083,12 @@ fn main() -> Result<()> {
 }
 ```
 
-Running it will print:
+> **N.d.T.** — `main` est la fonction principale, le point d'entrée du
+> programme. Elle ouvre le fichier, le copie dans le tampon, le décode, puis
+> affiche chaque partie avec `println!`. Le format `{:#?}` produit un affichage
+> détaillé et indenté, pratique pour vérifier le contenu d'une structure.
+
+L'exécution affiche :
 
 ```text
 DnsHeader {
@@ -851,4 +1119,16 @@ A {
 }
 ```
 
-In the next chapter, we'll add network connectivity: [Chapter 2 - Building a stub resolver](/chapter2.md)
+> **Note du traducteur — Lancer cet exemple**
+>
+> Le programme complet de ce chapitre se trouve dans `examples/sample1.rs`.
+> Après avoir généré `response_packet.txt` comme expliqué plus haut (le fichier
+> doit se trouver dans le dossier depuis lequel vous lancez la commande),
+> exécutez `cargo run --example sample1` (voir le [README](README.md) pour
+> l'installation de Rust). L'identifiant `34346` affiché correspond bien à
+> `0x862a`, les deux premiers octets du paquet. Les versions récentes de Rust
+> ajoutent une virgule à la fin de chaque ligne de cet affichage ; c'est sans
+> incidence.
+
+Au chapitre suivant, nous ajouterons la connexion au réseau :
+[Chapitre 2 - Construire un résolveur minimal (*stub resolver*)](chapter2.md)
