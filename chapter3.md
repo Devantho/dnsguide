@@ -175,6 +175,12 @@ pub enum DnsRecord {
 }
 ```
 
+> **N.d.T.** — Le type `Ipv6Addr` doit être importé en tête du fichier :
+> remplacez `use std::net::Ipv4Addr;` par
+> `use std::net::{Ipv4Addr, Ipv6Addr};`, sinon la compilation échoue avec
+> l'erreur *cannot find type `Ipv6Addr` in this scope*. Voir le début de
+> `examples/sample3.rs`.
+
 > **N.d.T.** — Chaque variante de l'énumération décrit les informations propres
 > à un type d'enregistrement : `addr` (l'adresse) pour A et AAAA, `host` (le nom
 > d'hôte vers lequel pointe l'enregistrement) pour NS et CNAME, `priority` et

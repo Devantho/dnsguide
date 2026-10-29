@@ -275,6 +275,12 @@ impl DnsPacket {
 Nous sommes prêts à implémenter notre résolveur minimal. Rust fournit un
 `UDPSocket` bien pratique, qui fait l'essentiel du travail.
 
+> **N.d.T.** — En tête du fichier, ajoutez `use std::net::UdpSocket;` pour
+> pouvoir utiliser le socket. Les lignes `use std::fs::File;` et
+> `use std::io::Read;` du chapitre 1 ne servent plus, puisqu'on ne lit plus de
+> fichier : vous pouvez les supprimer (les garder provoque seulement un
+> avertissement, pas une erreur). Voir le début de `examples/sample2.rs`.
+
 > **N.d.T.** — Un **socket** est le « point de branchement » d'un programme sur
 > le réseau : on l'ouvre sur un port local (ici 43210, choisi arbitrairement),
 > puis on s'en sert pour envoyer (`send_to`) et recevoir (`recv_from`) des

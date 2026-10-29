@@ -521,6 +521,36 @@ nous utiliserons une `struct` (structure) appelée `BytePacketBuffer`.
 > - Le [glossaire](GLOSSAIRE.md) reprend ces notions et les autres termes du
 >   guide.
 
+> **Note du traducteur — Lignes à placer en tête du fichier**
+>
+> Le texte du guide ne montre pas les premières lignes du programme, pourtant
+> indispensables : elles figurent seulement dans `examples/sample1.rs`. Si vous
+> recopiez le code des chapitres dans votre propre fichier, commencez-le par :
+>
+> ```rust
+> use std::fs::File;
+> use std::io::Read;
+> use std::net::Ipv4Addr;
+>
+> type Error = Box<dyn std::error::Error>;
+> type Result<T> = std::result::Result<T, Error>;
+> ```
+>
+> - Les trois lignes `use` importent des éléments de la bibliothèque standard
+>   de Rust : `File` (ouvrir un fichier), `Read` (lire son contenu) et
+>   `Ipv4Addr` (adresse IPv4).
+> - Les deux lignes `type` définissent le `Result<...>` utilisé partout dans
+>   le guide. Le `Result` standard de Rust attend deux informations : le type
+>   du résultat et le type de l'erreur (`Result<T, E>`). Ce raccourci fixe une
+>   fois pour toutes le type d'erreur (`Box<dyn std::error::Error>`, c'est-à-dire
+>   « n'importe quelle erreur »), ce qui permet d'écrire simplement
+>   `Result<u8>`. Sans ces lignes, chaque `Result<...>` provoque l'erreur
+>   *enum takes 2 generic arguments but 1 generic argument was supplied*
+>   (« l'énumération attend 2 paramètres, 1 seul a été fourni »).
+>
+> Ces lignes évoluent légèrement d'un chapitre à l'autre ; en cas de doute,
+> reportez-vous au début du fichier `examples/sampleN.rs` correspondant.
+
 ```rust
 pub struct BytePacketBuffer {
     pub buf: [u8; 512],
