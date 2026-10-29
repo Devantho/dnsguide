@@ -80,22 +80,26 @@ impl BytePacketBuffer {
         let max_jumps = 5;
         let mut jumps_performed = 0;
         loop {
-            // Dns Packets are untrusted data, so we need to be paranoid. Someone
-            // can craft a packet with a cycle in the jump instructions. This guards
-            // against such packets.
+            // Les paquets DNS sont des données non fiables : il faut donc être
+            // paranoïaque. Quelqu'un pourrait fabriquer un paquet dont les
+            // instructions de saut forment une boucle sans fin. Ce test protège
+            // contre ce type de paquet.
             if jumps_performed > max_jumps {
                 return Err(format!("Limit of {} jumps exceeded", max_jumps).into());
             }
 
             let len = self.get(pos)?;
 
-            // A two byte sequence, where the two highest bits of the first byte is
-            // set, represents a offset relative to the start of the buffer. We
-            // handle this by jumping to the offset, setting a flag to indicate
-            // that we shouldn't update the shared buffer position once done.
+            // Une séquence de deux octets dont les deux bits de poids fort du
+            // premier octet sont à 1 représente une position (offset) comptée
+            // depuis le début du tampon. On la traite en sautant à cette
+            // position, et en levant un indicateur qui signale qu'il ne faudra
+            // pas mettre à jour la position partagée du tampon une fois
+            // terminé.
             if (len & 0xC0) == 0xC0 {
-                // When a jump is performed, we only modify the shared buffer
-                // position once, and avoid making the change later on.
+                // Lors d'un saut, on ne modifie la position partagée du tampon
+                // qu'une seule fois, et on évite de la modifier de nouveau par
+                // la suite.
                 if !jumped {
                     self.seek(pos + 2)?;
                 }
@@ -110,7 +114,7 @@ impl BytePacketBuffer {
 
             pos += 1;
 
-            // Names are terminated by an empty label of length 0
+            // Les noms se terminent par un label vide de longueur 0
             if len == 0 {
                 break;
             }
@@ -274,7 +278,9 @@ impl DnsHeader {
         self.authoritative_entries = buffer.read_u16()?;
         self.resource_entries = buffer.read_u16()?;
 
-        // Return the constant header size
+        // N.d.T. : commentaire d'origine obsolète (« renvoie la taille
+        // constante de l'en-tête »). La fonction se termine aujourd'hui
+        // simplement par Ok(()), qui signifie « tout s'est bien passé ».
         Ok(())
     }
 
@@ -342,7 +348,7 @@ impl DnsQuestion {
     pub fn read(&mut self, buffer: &mut BytePacketBuffer) -> Result<()> {
         buffer.read_qname(&mut self.name)?;
         self.qtype = QueryType::from_num(buffer.read_u16()?); // qtype
-        let _ = buffer.read_u16()?; // class
+        let _ = buffer.read_u16()?; // classe
 
         Ok(())
     }
@@ -512,18 +518,19 @@ impl DnsPacket {
 }
 
 fn main() -> Result<()> {
-    // Perform an A query for google.com
+    // Effectue une requête de type A pour google.com
     let qname = "google.com";
     let qtype = QueryType::A;
 
-    // Using googles public DNS server
+    // On utilise le serveur DNS public de Google
     let server = ("8.8.8.8", 53);
 
-    // Bind a UDP socket to an arbitrary port
+    // Ouvre un socket UDP sur un port choisi arbitrairement
     let socket = UdpSocket::bind(("0.0.0.0", 43210))?;
 
-    // Build our query packet. It's important that we remember to set the
-    // `recursion_desired` flag. As noted earlier, the packet id is arbitrary.
+    // Construit notre paquet de requête. Il ne faut pas oublier d'activer le
+    // drapeau `recursion_desired` (récursion souhaitée). Comme indiqué plus
+    // haut, l'identifiant du paquet est arbitraire.
     let mut packet = DnsPacket::new();
 
     packet.header.id = 6666;
@@ -533,20 +540,22 @@ fn main() -> Result<()> {
         .questions
         .push(DnsQuestion::new(qname.to_string(), qtype));
 
-    // Use our new write method to write the packet to a buffer...
+    // On utilise notre nouvelle méthode write pour écrire le paquet dans un
+    // tampon...
     let mut req_buffer = BytePacketBuffer::new();
     packet.write(&mut req_buffer)?;
 
-    // ...and send it off to the server using our socket:
+    // ...puis on l'envoie au serveur via notre socket :
     socket.send_to(&req_buffer.buf[0..req_buffer.pos], server)?;
 
-    // To prepare for receiving the response, we'll create a new `BytePacketBuffer`,
-    // and ask the socket to write the response directly into our buffer.
+    // Pour préparer la réception de la réponse, on crée un nouveau
+    // `BytePacketBuffer` et on demande au socket d'écrire la réponse
+    // directement dans ce tampon.
     let mut res_buffer = BytePacketBuffer::new();
     socket.recv_from(&mut res_buffer.buf)?;
 
-    // As per the previous section, `DnsPacket::from_buffer()` is then used to
-    // actually parse the packet after which we can print the response.
+    // Comme au chapitre précédent, `DnsPacket::from_buffer()` sert ensuite à
+    // décoder le paquet, après quoi on peut afficher la réponse.
     let res_packet = DnsPacket::from_buffer(&mut res_buffer)?;
     println!("{:#?}", res_packet.header);
 

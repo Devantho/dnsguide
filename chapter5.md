@@ -1,23 +1,38 @@
-5 - Recursive Resolve
-=====================
+5 - Résolution récursive
+========================
 
-Our server is working, but being reliant on another server to actually perform
-the lookup is annoying and less than useful. Now is a good time to delve into
-the details of how a name is really resolved.
+Notre serveur fonctionne, mais dépendre d'un autre serveur pour effectuer
+réellement la recherche est agaçant et d'un intérêt limité. C'est le bon moment
+pour entrer dans le détail de la façon dont un nom est réellement résolu.
 
-Assuming that no information is known since before, the question is first
-issued to one of the Internet's 13 root servers. Why 13? Because that's how
-many that fits into a 512 byte DNS packet (strictly speaking, there's room for
-14, but some margin was left). You might think that 13 seems a bit on the low
-side for handling all of the internet, and you'd be right -- there are 13
-logical servers, but in reality many more. You can read more about it
-[here](http://www.root-servers.org/). Any resolver will need to know of these
-13 servers before hand. A file containing all of them, in bind format, is
-available and called [named.root](https://www.internic.net/domain/named.root).
-These servers all contain the same information, and to get started we can pick
-one of them at random. Looking at `named.root` we see that the IP-address of
-*a.root-servers.net* is 198.41.0.4, so we'll go ahead and use that to perform
-our initial query for *www.google.com*.
+En partant du principe qu'on ne sait rien au départ, la question est d'abord
+posée à l'un des 13 serveurs racine d'Internet. Pourquoi 13 ? Parce que c'est le
+nombre de serveurs qui tiennent dans un paquet DNS de 512 octets (à strictement
+parler, il y a de la place pour 14, mais une marge a été conservée). On pourrait
+penser que 13, c'est un peu juste pour gérer tout Internet, et on aurait
+raison : il y a 13 serveurs logiques, mais beaucoup plus en réalité. Vous pouvez
+en savoir plus [ici](http://www.root-servers.org/). Tout résolveur doit
+connaître ces 13 serveurs à l'avance. Un fichier qui les recense tous, au format
+bind, est disponible sous le nom
+[named.root](https://www.internic.net/domain/named.root). Ces serveurs
+contiennent tous les mêmes informations ; pour commencer, nous pouvons donc en
+choisir un au hasard. En consultant `named.root`, on voit que l'adresse IP de
+*a.root-servers.net* est 198.41.0.4 : nous l'utiliserons pour effectuer notre
+requête initiale sur *www.google.com*.
+
+> **Note du traducteur — Serveurs racine et format bind**
+>
+> - Les 13 serveurs racine sont désignés par les lettres `a` à `m`
+>   (`a.root-servers.net`, `b.root-servers.net`…). Chacune de ces 13 adresses
+>   est en réalité servie par de nombreuses machines réparties dans le monde
+>   entier (technique dite *anycast*) : c'est ce que l'auteur appelle « 13
+>   serveurs logiques ».
+> - **BIND** est le logiciel de serveur DNS le plus répandu historiquement ;
+>   son format de fichier sert de référence pour décrire des enregistrements
+>   DNS.
+> - Ici, on interroge les serveurs avec `+norecurse` : on se comporte comme le
+>   ferait un serveur cache, en demandant à chaque serveur ce qu'il sait
+>   lui-même, sans lui demander de faire la recherche à notre place.
 
 ```text
 # dig +norecurse @198.41.0.4 www.google.com
@@ -72,20 +87,28 @@ d.gtld-servers.net.	172800	IN	A	192.31.80.30
 ;; MSG SIZE  rcvd: 531
 ```
 
-The root servers don't know about *www.google.com*, but they do know about
-*com*, so our reply tells us where to go next. There are a few things to take
-note of:
+Les serveurs racine ne connaissent pas *www.google.com*, mais ils connaissent
+*com* ; leur réponse nous indique donc où aller ensuite. Quelques points sont à
+noter :
 
- * We are provided with a set of NS records, which are in the authority
-   section. NS records tells us *the name* of the name server handling
-   a domain.
- * The server is being helpful by passing along A records corresponding to the
-   NS records, so we don't have to perform a second lookup.
- * We didn't actually perform a query for *com*, but rather *www.google.com*.
-   However, the NS records all refer to *com*.
+ * On nous fournit un ensemble d'enregistrements NS, qui se trouvent dans la
+   section Autorité. Les enregistrements NS nous donnent *le nom* du serveur de
+   noms qui gère un domaine.
+ * Le serveur se montre serviable en joignant les enregistrements A
+   correspondant aux enregistrements NS, ce qui nous évite une seconde
+   recherche.
+ * Nous n'avons pas réellement demandé *com*, mais *www.google.com*. Pourtant,
+   les enregistrements NS font tous référence à *com*.
 
-Let's pick a server from the result and move on. *192.5.6.30* for
-*a.gtld-servers.net* seems as good as any.
+> **N.d.T.** — Dans l'en-tête de la réponse, `ANSWER: 0` signifie que le
+> serveur n'a pas de réponse directe ; `AUTHORITY: 13` et `ADDITIONAL: 16`
+> indiquent qu'il nous renvoie vers d'autres serveurs, avec leurs adresses. Un
+> NS donne le *nom* d'un serveur ; pour le contacter, il faut aussi son
+> *adresse IP*, d'où l'utilité des enregistrements A de la section
+> Additionnelle.
+
+Choisissons un serveur dans le résultat et continuons. *192.5.6.30*, pour
+*a.gtld-servers.net*, en vaut bien un autre.
 
 ```text
 # dig +norecurse @192.5.6.30 www.google.com
@@ -120,9 +143,9 @@ ns4.google.com.		172800	IN	A	216.239.38.10
 ;; MSG SIZE  rcvd: 179
 ```
 
-We're still not at *www.google.com*, but at least we have a set of servers that
-handle the *google.com* domain now. Let's give it another shot by sending our
-query to *216.239.32.10*.
+Nous ne sommes toujours pas arrivés à *www.google.com*, mais nous disposons
+maintenant d'un ensemble de serveurs qui gèrent le domaine *google.com*. Faisons
+une nouvelle tentative en envoyant notre requête à *216.239.32.10*.
 
 ```text
 # dig +norecurse @216.239.32.10 www.google.com
@@ -146,31 +169,66 @@ www.google.com.     300 IN  A   216.58.211.132
 ;; MSG SIZE  rcvd: 48
 ```
 
-And here we go! The IP of *www.google.com* as we desired. Let's recap:
+Et voilà ! L'adresse IP de *www.google.com*, comme nous le souhaitions.
+Récapitulons :
 
- * *a.root-servers.net* tells us to check *a.gtld-servers.net* which handles com
- * *a.gtld-servers.net* tells us to check *ns1.google.com* which handles google.com
- * *ns1.google.com* tells us the IP of *www.google.com*
+ * *a.root-servers.net* nous dit d'interroger *a.gtld-servers.net*, qui gère com
+ * *a.gtld-servers.net* nous dit d'interroger *ns1.google.com*, qui gère
+   google.com
+ * *ns1.google.com* nous donne l'adresse IP de *www.google.com*
 
-This is rather typical, and most lookups will only ever require three steps,
-even without caching. It's still possible to have name servers for subdomains,
-and further ones for sub-subdomains, though. In practice, a DNS server will
-maintain a cache, and most TLD's will be known since before. That means that
-most queries will only ever require two lookups by the server, and commonly one
-or zero.
+> **N.d.T.** — C'est un peu comme retrouver un document d'urbanisme : on
+> s'adresse d'abord à un guichet national, qui vous oriente vers le bon service
+> régional, qui vous oriente à son tour vers la mairie compétente, laquelle
+> détient l'information. Notez le drapeau `aa` dans la dernière réponse : c'est
+> le serveur qui fait autorité pour `google.com` qui répond.
 
-### Extending DnsPacket for recursive lookups
+C'est assez typique : la plupart des recherches ne nécessitent que trois étapes,
+même sans cache. Il est toutefois possible d'avoir des serveurs de noms pour des
+sous-domaines, puis d'autres pour des sous-sous-domaines. En pratique, un
+serveur DNS tient un cache, et la plupart des TLD y sont déjà connus. La plupart
+des requêtes ne nécessitent donc que deux recherches de la part du serveur, et
+souvent une seule, voire aucune.
 
-Before we can get on, we'll need a few utility functions on `DnsPacket`.
+### Étendre DnsPacket pour les recherches récursives
+
+Avant de continuer, il nous faut quelques fonctions utilitaires dans
+`DnsPacket`.
+
+> **Note du traducteur — Les chaînes d'itérateurs**
+>
+> Ces fonctions utilisent un style d'écriture typique de Rust, qu'on peut lire
+> comme une chaîne de traitement : `.iter()` parcourt les éléments d'une liste
+> un par un ; chaque étape suivante filtre (`.filter`), transforme (`.map`) ou
+> fait les deux à la fois (`.filter_map`) ; `.flat_map` remplace chaque élément
+> par une nouvelle série d'éléments ; enfin, `.next()` prend le premier élément
+> qui sort de la chaîne. `Option<...>` signifie « une valeur ou rien » :
+> `Some(x)` quand on a trouvé quelque chose, `None` sinon. `|record| ...`
+> désigne une petite fonction anonyme appliquée à chaque élément. Les `'a` sont
+> des annotations techniques de Rust (durées de vie), que l'on peut ignorer en
+> première lecture.
+>
+> En clair :
+>
+> - `get_random_a` renvoie la première adresse IP trouvée dans la section
+>   Réponse ;
+> - `get_ns` liste les serveurs de noms de la section Autorité qui sont
+>   compétents pour le nom recherché (leur domaine est la fin du nom
+>   recherché : `com` pour `www.google.com`) ;
+> - `get_resolved_ns` cherche, pour ces serveurs, une adresse IP déjà fournie
+>   dans la section Additionnelle ;
+> - `get_unresolved_ns` renvoie simplement le nom d'un de ces serveurs, quand
+>   aucune adresse n'est fournie.
 
 ```rust
 impl DnsPacket {
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
-    /// It's useful to be able to pick a random A record from a packet. When we
-    /// get multiple IP's for a single name, it doesn't matter which one we
-    /// choose, so in those cases we can now pick one at random.
+    /// Il est utile de pouvoir choisir un enregistrement A au hasard dans un
+    /// paquet. Quand on obtient plusieurs IP pour un même nom, peu importe
+    /// laquelle on retient : on peut donc en prendre une au hasard. (N.d.T. :
+    /// en pratique, ce code prend simplement la première.)
     pub fn get_random_a(&self) -> Option<Ipv4Addr> {
         self.answers
             .iter()
@@ -181,114 +239,127 @@ impl DnsPacket {
             .next()
     }
 
-    /// A helper function which returns an iterator over all name servers in
-    /// the authorities section, represented as (domain, host) tuples
+    /// Fonction utilitaire qui renvoie un itérateur sur tous les serveurs de
+    /// noms de la section Autorité, sous forme de couples (domaine, hôte)
     fn get_ns<'a>(&'a self, qname: &'a str) -> impl Iterator<Item = (&'a str, &'a str)> {
         self.authorities
             .iter()
-            // In practice, these are always NS records in well formed packages.
-            // Convert the NS records to a tuple which has only the data we need
-            // to make it easy to work with.
+            // En pratique, ce sont toujours des enregistrements NS dans les
+            // paquets bien formés. On convertit chaque enregistrement NS en un
+            // couple ne contenant que les données utiles, pour simplifier la
+            // suite.
             .filter_map(|record| match record {
                 DnsRecord::NS { domain, host, .. } => Some((domain.as_str(), host.as_str())),
                 _ => None,
             })
-            // Discard servers which aren't authoritative to our query
+            // On écarte les serveurs qui ne font pas autorité pour notre
+            // requête
             .filter(move |(domain, _)| qname.ends_with(*domain))
     }
 
-    /// We'll use the fact that name servers often bundle the corresponding
-    /// A records when replying to an NS query to implement a function that
-    /// returns the actual IP for an NS record if possible.
+    /// Les serveurs de noms joignent souvent les enregistrements A
+    /// correspondants lorsqu'ils répondent avec des NS. On en profite pour
+    /// écrire une fonction qui renvoie, si possible, l'adresse IP effective
+    /// d'un enregistrement NS.
     pub fn get_resolved_ns(&self, qname: &str) -> Option<Ipv4Addr> {
-        // Get an iterator over the nameservers in the authorities section
+        // Itérateur sur les serveurs de noms de la section Autorité
         self.get_ns(qname)
-            // Now we need to look for a matching A record in the additional
-            // section. Since we just want the first valid record, we can just
-            // build a stream of matching records.
+            // Il faut maintenant chercher un enregistrement A correspondant
+            // dans la section Additionnelle. Comme seul le premier
+            // enregistrement valide nous intéresse, il suffit de construire un
+            // flux des enregistrements qui correspondent.
             .flat_map(|(_, host)| {
                 self.resources
                     .iter()
-                    // Filter for A records where the domain match the host
-                    // of the NS record that we are currently processing
+                    // On ne garde que les enregistrements A dont le domaine
+                    // correspond à l'hôte de l'enregistrement NS en cours de
+                    // traitement
                     .filter_map(move |record| match record {
                         DnsRecord::A { domain, addr, .. } if domain == host => Some(addr),
                         _ => None,
                     })
             })
             .map(|addr| *addr)
-            // Finally, pick the first valid entry
+            // Enfin, on prend la première entrée valide
             .next()
     }
 
-    /// However, not all name servers are as that nice. In certain cases there won't
-    /// be any A records in the additional section, and we'll have to perform *another*
-    /// lookup in the midst. For this, we introduce a method for returning the host
-    /// name of an appropriate name server.
+    /// Cependant, tous les serveurs de noms ne sont pas aussi aimables.
+    /// Parfois, la section Additionnelle ne contient aucun enregistrement A, et
+    /// il faut effectuer une *autre* résolution en cours de route. Pour cela,
+    /// on ajoute une méthode qui renvoie le nom d'hôte d'un serveur de noms
+    /// approprié.
     pub fn get_unresolved_ns<'a>(&'a self, qname: &'a str) -> Option<&'a str> {
-        // Get an iterator over the nameservers in the authorities section
+        // Itérateur sur les serveurs de noms de la section Autorité
         self.get_ns(qname)
             .map(|(_, host)| host)
-            // Finally, pick the first valid entry
+            // Enfin, on prend la première entrée valide
             .next()
     }
 
-} // End of DnsPacket
+} // Fin de DnsPacket
 ```
 
-### Implementing recursive lookup
+### Implémenter la recherche récursive
 
-We move swiftly on to our new `recursive_lookup` function:
+Passons sans tarder à notre nouvelle fonction `recursive_lookup` :
 
 ```rust
 fn recursive_lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
-    // For now we're always starting with *a.root-servers.net*.
+    // Pour l'instant, on commence toujours par *a.root-servers.net*.
     let mut ns = "198.41.0.4".parse::<Ipv4Addr>().unwrap();
 
-    // Since it might take an arbitrary number of steps, we enter an unbounded loop.
+    // Le nombre d'étapes n'étant pas connu à l'avance, on entre dans une boucle
+    // sans limite.
     loop {
         println!("attempting lookup of {:?} {} with ns {}", qtype, qname, ns);
 
-        // The next step is to send the query to the active server.
+        // L'étape suivante consiste à envoyer la requête au serveur courant.
         let ns_copy = ns;
 
         let server = (ns_copy, 53);
         let response = lookup(qname, qtype, server)?;
 
-        // If there are entries in the answer section, and no errors, we are done!
+        // Si la section Réponse contient des entrées et qu'il n'y a pas
+        // d'erreur, c'est terminé !
         if !response.answers.is_empty() && response.header.rescode == ResultCode::NOERROR {
             return Ok(response);
         }
 
-        // We might also get a `NXDOMAIN` reply, which is the authoritative name servers
-        // way of telling us that the name doesn't exist.
+        // On peut aussi recevoir une réponse `NXDOMAIN` : c'est la façon dont
+        // le serveur de noms faisant autorité nous indique que le nom n'existe
+        // pas.
         if response.header.rescode == ResultCode::NXDOMAIN {
             return Ok(response);
         }
 
-        // Otherwise, we'll try to find a new nameserver based on NS and a corresponding A
-        // record in the additional section. If this succeeds, we can switch name server
-        // and retry the loop.
+        // Sinon, on cherche un nouveau serveur de noms à partir d'un
+        // enregistrement NS et de l'enregistrement A correspondant dans la
+        // section Additionnelle. Si on en trouve un, on change de serveur de
+        // noms et on recommence la boucle.
         if let Some(new_ns) = response.get_resolved_ns(qname) {
             ns = new_ns;
 
             continue;
         }
 
-        // If not, we'll have to resolve the ip of a NS record. If no NS records exist,
-        // we'll go with what the last server told us.
+        // Sinon, il faut résoudre l'adresse IP d'un enregistrement NS. S'il n'y
+        // a aucun enregistrement NS, on s'en tient à ce que le dernier serveur
+        // nous a répondu.
         let new_ns_name = match response.get_unresolved_ns(qname) {
             Some(x) => x,
             None => return Ok(response),
         };
 
-        // Here we go down the rabbit hole by starting _another_ lookup sequence in the
-        // midst of our current one. Hopefully, this will give us the IP of an appropriate
-        // name server.
+        // On s'enfonce ici d'un niveau en lançant une _autre_ séquence de
+        // résolution au beau milieu de la séquence en cours. Avec un peu de
+        // chance, elle nous donnera l'adresse IP d'un serveur de noms
+        // approprié.
         let recursive_response = recursive_lookup(&new_ns_name, QueryType::A)?;
 
-        // Finally, we pick a random ip from the result, and restart the loop. If no such
-        // record is available, we again return the last result we got.
+        // Enfin, on choisit une adresse IP au hasard dans le résultat et on
+        // relance la boucle. Si aucun enregistrement de ce type n'est
+        // disponible, on renvoie là encore le dernier résultat obtenu.
         if let Some(new_ns) = recursive_response.get_random_a() {
             ns = new_ns;
         } else {
@@ -298,35 +369,63 @@ fn recursive_lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
 }
 ```
 
-This also requires a small change to the `lookup` function, as we need to
-pass which server to use. We add a server parameter to the function signature,
-and remove the hardcoded `server` variable we used in chapter 4:
+> **Note du traducteur — L'algorithme en clair**
+>
+> On part du serveur racine `198.41.0.4`, puis on répète :
+>
+> 1. poser la question au serveur courant ;
+> 2. s'il donne la réponse (ou affirme que le nom n'existe pas, `NXDOMAIN`),
+>    c'est terminé ;
+> 3. sinon, s'il indique un serveur plus compétent *avec* son adresse IP, on
+>    passe à ce serveur et on recommence ;
+> 4. sinon, s'il indique seulement le *nom* d'un serveur plus compétent, on
+>    lance une nouvelle recherche complète pour trouver l'adresse IP de ce
+>    serveur, puis on recommence avec lui ;
+> 5. s'il n'indique rien d'exploitable, on renvoie sa réponse telle quelle.
+>
+> L'étape 4 est une **récursion** : la fonction `recursive_lookup` s'appelle
+> elle-même, comme un sous-traitant qui doit lui-même consulter un autre
+> sous-traitant avant de pouvoir avancer. Ce code est pédagogique : il ne fixe
+> aucune limite au nombre d'étapes et ne garde aucun cache. Il n'est pas conçu
+> pour un usage en production.
+
+Cela nécessite aussi une petite modification de la fonction `lookup`, puisqu'il
+faut lui indiquer quel serveur utiliser. Nous ajoutons un paramètre `server` à
+la signature de la fonction et supprimons la variable `server` écrite en dur que
+nous utilisions au chapitre 4 :
 
 ```rust
 fn lookup(qname: &str, qtype: QueryType, server: (Ipv4Addr, u16)) -> Result<DnsPacket> {
 ```
 
-### Trying out recursive lookup
+> **N.d.T.** — `server: (Ipv4Addr, u16)` est un couple (adresse IP, numéro de
+> port). La **signature** d'une fonction est sa première ligne, qui décrit ce
+> qu'elle reçoit et ce qu'elle renvoie.
 
-The only thing remaining is to change our `handle_query` function to use
-`recursive_lookup`:
+### Essayer la recherche récursive
+
+Il ne reste plus qu'à modifier notre fonction `handle_query` pour qu'elle
+utilise `recursive_lookup` :
 
 ```rust
 fn handle_query(socket: &UdpSocket) -> Result<()> {
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
             println!("Received query: {:?}", question);
             if let Ok(result) = recursive_lookup(&question.name, question.qtype) {
                 packet.questions.push(question.clone());
                 packet.header.rescode = result.header.rescode;
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
 }
 ```
 
-Let's try it!
+Essayons !
+
+> **N.d.T.** — Même procédure qu'au chapitre 4 : `cargo run --example sample5`
+> dans un premier terminal, puis la commande `dig` ci-dessous dans un second.
 
 ```text
 # dig @127.0.0.1 -p 2053 www.google.com
@@ -350,7 +449,7 @@ www.google.com.		300	IN	A	216.58.211.132
 ;; MSG SIZE  rcvd: 62
 ```
 
-Looking at our server window, we see:
+Dans la fenêtre de notre serveur, on voit :
 
 ```text
 Received query: DnsQuestion { name: "www.google.com", qtype: A }
@@ -360,18 +459,38 @@ attempting lookup of A www.google.com with ns 216.239.34.10
 Answer: A { domain: "www.google.com", addr: 216.58.211.132, ttl: 300 }
 ```
 
-This mirrors our manual process earlier. We can now successfully resolve
-a domain starting from the list of root servers. We've now got a fully
-functional, albeit suboptimal, DNS server.
+> **N.d.T.** — *attempting lookup of A www.google.com with ns …* signifie
+> « tentative de recherche de A www.google.com auprès du serveur de noms … ».
+> On retrouve les trois étapes : serveur racine, serveur de `.com`, puis
+> serveur de `google.com`. Le programme prend à chaque fois le premier serveur
+> de la liste, d'où des adresses différentes de celles choisies à la main plus
+> haut. Le temps de réponse (`Query time: 76 msec`) est plus long qu'au
+> chapitre 4, puisque notre serveur fait désormais tout le chemin lui-même, sans
+> cache.
 
-There are many things that we could do better. For instance, there is no true
-concurrency in this server. We can neither send nor receive queries over TCP.
-We cannot use it to host our own zones, and allow it to act as an authorative
-server. The lack of support for DNSSEC leaves us open to DNS poisoning attacks
-where a malicious server can return records relating to somebody else's domain.
+Cela reproduit la démarche manuelle que nous avons suivie plus haut. Nous savons
+désormais résoudre un domaine en partant de la liste des serveurs racine. Nous
+disposons maintenant d'un serveur DNS pleinement fonctionnel, même s'il est loin
+d'être optimal.
 
-Many of these problems have been fixed in my own project
-[hermes](https://github.com/EmilHernvall/hermes), so you can head over there to
-investigate how I did it, or continue on your own from here. Or maybe you've
-had enough of DNS for now... :) Regardless, I hope you've gained some new insight
-into how DNS works.
+Il y a beaucoup de choses que nous pourrions mieux faire. Par exemple, ce
+serveur ne sait pas réellement traiter plusieurs requêtes en parallèle. Il ne
+sait ni envoyer ni recevoir de requêtes sur TCP. Nous ne pouvons pas l'utiliser
+pour héberger nos propres zones et le faire agir comme serveur faisant autorité.
+L'absence de prise en charge de DNSSEC nous expose aux attaques par
+empoisonnement DNS, dans lesquelles un serveur malveillant peut renvoyer des
+enregistrements relatifs au domaine de quelqu'un d'autre.
+
+> **N.d.T.** — L'**empoisonnement DNS** (*DNS poisoning*) consiste à glisser de
+> fausses réponses dans un serveur, pour qu'un nom légitime (celui d'une banque,
+> par exemple) pointe vers le serveur d'un attaquant. C'est l'équivalent d'un
+> faux avis de changement d'adresse : le courrier part ensuite vers la mauvaise
+> destination. DNSSEC permet de vérifier, par signature, que la réponse provient
+> bien du serveur faisant autorité.
+
+Beaucoup de ces problèmes ont été corrigés dans mon propre projet
+[hermes](https://github.com/EmilHernvall/hermes) : vous pouvez aller y voir
+comment je m'y suis pris, ou bien poursuivre par vous-même à partir d'ici. À
+moins que vous n'ayez eu votre dose de DNS pour le moment… :) Quoi qu'il en
+soit, j'espère que ce guide vous a permis de mieux comprendre le fonctionnement
+du DNS.

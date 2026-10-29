@@ -11,8 +11,8 @@ pub struct BytePacketBuffer {
 }
 
 impl BytePacketBuffer {
-    /// This gives us a fresh buffer for holding the packet contents, and a
-    /// field for keeping track of where we are.
+    /// Crée un tampon (buffer) vierge destiné à contenir le paquet, ainsi qu'un
+    /// champ qui mémorise la position où l'on se trouve.
     pub fn new() -> BytePacketBuffer {
         BytePacketBuffer {
             buf: [0; 512],
@@ -20,26 +20,26 @@ impl BytePacketBuffer {
         }
     }
 
-    /// Current position within buffer
+    /// Position courante dans le tampon
     fn pos(&self) -> usize {
         self.pos
     }
 
-    /// Step the buffer position forward a specific number of steps
+    /// Avance la position dans le tampon d'un nombre de pas donné
     fn step(&mut self, steps: usize) -> Result<()> {
         self.pos += steps;
 
         Ok(())
     }
 
-    /// Change the buffer position
+    /// Modifie la position dans le tampon
     fn seek(&mut self, pos: usize) -> Result<()> {
         self.pos = pos;
 
         Ok(())
     }
 
-    /// Read a single byte and move the position one step forward
+    /// Lit un seul octet et avance la position d'un pas
     fn read(&mut self) -> Result<u8> {
         if self.pos >= 512 {
             return Err("End of buffer".into());
@@ -50,7 +50,7 @@ impl BytePacketBuffer {
         Ok(res)
     }
 
-    /// Get a single byte, without changing the buffer position
+    /// Récupère un seul octet, sans modifier la position dans le tampon
     fn get(&mut self, pos: usize) -> Result<u8> {
         if pos >= 512 {
             return Err("End of buffer".into());
@@ -58,7 +58,7 @@ impl BytePacketBuffer {
         Ok(self.buf[pos])
     }
 
-    /// Get a range of bytes
+    /// Récupère une plage d'octets
     fn get_range(&mut self, start: usize, len: usize) -> Result<&[u8]> {
         if start + len >= 512 {
             return Err("End of buffer".into());
@@ -66,14 +66,14 @@ impl BytePacketBuffer {
         Ok(&self.buf[start..start + len as usize])
     }
 
-    /// Read two bytes, stepping two steps forward
+    /// Lit deux octets et avance de deux pas
     fn read_u16(&mut self) -> Result<u16> {
         let res = ((self.read()? as u16) << 8) | (self.read()? as u16);
 
         Ok(res)
     }
 
-    /// Read four bytes, stepping four steps forward
+    /// Lit quatre octets et avance de quatre pas
     fn read_u32(&mut self) -> Result<u32> {
         let res = ((self.read()? as u32) << 24)
             | ((self.read()? as u32) << 16)
@@ -83,84 +83,86 @@ impl BytePacketBuffer {
         Ok(res)
     }
 
-    /// Read a qname
+    /// Lit un qname (le nom de domaine contenu dans le paquet)
     ///
-    /// The tricky part: Reading domain names, taking labels into consideration.
-    /// Will take something like [3]www[6]google[3]com[0] and append
-    /// www.google.com to outstr.
+    /// La partie délicate : lire les noms de domaine en tenant compte des
+    /// labels. Transforme par exemple [3]www[6]google[3]com[0] en
+    /// www.google.com, qui est ajouté à la fin de outstr.
     fn read_qname(&mut self, outstr: &mut String) -> Result<()> {
-        // Since we might encounter jumps, we'll keep track of our position
-        // locally as opposed to using the position within the struct. This
-        // allows us to move the shared position to a point past our current
-        // qname, while keeping track of our progress on the current qname
-        // using this variable.
+        // Comme nous pouvons rencontrer des sauts, nous suivons notre position
+        // dans une variable locale plutôt que d'utiliser celle de la structure.
+        // Cela permet de placer la position partagée juste après le qname en
+        // cours, tout en continuant à suivre notre progression dans ce qname
+        // grâce à cette variable.
         let mut pos = self.pos();
 
-        // track whether or not we've jumped
+        // indique si nous avons effectué un saut ou non
         let mut jumped = false;
         let max_jumps = 5;
         let mut jumps_performed = 0;
 
-        // Our delimiter which we append for each label. Since we don't want a
-        // dot at the beginning of the domain name we'll leave it empty for now
-        // and set it to "." at the end of the first iteration.
+        // Le séparateur ajouté avant chaque label. Comme on ne veut pas de
+        // point au début du nom de domaine, on le laisse vide pour l'instant et
+        // on le passera à "." à la fin du premier tour de boucle.
         let mut delim = "";
         loop {
-            // Dns Packets are untrusted data, so we need to be paranoid. Someone
-            // can craft a packet with a cycle in the jump instructions. This guards
-            // against such packets.
+            // Les paquets DNS sont des données non fiables : il faut donc être
+            // paranoïaque. Quelqu'un pourrait fabriquer un paquet dont les
+            // instructions de saut forment une boucle sans fin. Ce test protège
+            // contre ce type de paquet.
             if jumps_performed > max_jumps {
                 return Err(format!("Limit of {} jumps exceeded", max_jumps).into());
             }
 
-            // At this point, we're always at the beginning of a label. Recall
-            // that labels start with a length byte.
+            // À ce stade, on se trouve toujours au début d'un label. Pour
+            // rappel, un label commence par un octet qui indique sa longueur.
             let len = self.get(pos)?;
 
-            // If len has the two most significant bit are set, it represents a
-            // jump to some other offset in the packet:
+            // Si les deux bits de poids fort de len sont à 1, il s'agit d'un
+            // saut vers une autre position (offset) du paquet :
             if (len & 0xC0) == 0xC0 {
-                // Update the buffer position to a point past the current
-                // label. We don't need to touch it any further.
+                // On place la position du tampon juste après le label en cours.
+                // Nous n'aurons plus besoin d'y toucher ensuite.
                 if !jumped {
                     self.seek(pos + 2)?;
                 }
 
-                // Read another byte, calculate offset and perform the jump by
-                // updating our local position variable
+                // On lit l'octet suivant, on calcule la position cible (offset)
+                // et on effectue le saut en mettant à jour notre variable de
+                // position locale
                 let b2 = self.get(pos + 1)? as u16;
                 let offset = (((len as u16) ^ 0xC0) << 8) | b2;
                 pos = offset as usize;
 
-                // Indicate that a jump was performed.
+                // On note qu'un saut a été effectué.
                 jumped = true;
                 jumps_performed += 1;
 
                 continue;
             }
-            // The base scenario, where we're reading a single label and
-            // appending it to the output:
+            // Le cas de base : on lit un seul label et on l'ajoute au
+            // résultat :
             else {
-                // Move a single byte forward to move past the length byte.
+                // On avance d'un octet pour dépasser l'octet de longueur.
                 pos += 1;
 
-                // Domain names are terminated by an empty label of length 0,
-                // so if the length is zero we're done.
+                // Les noms de domaine se terminent par un label vide de
+                // longueur 0 : si la longueur vaut zéro, on a terminé.
                 if len == 0 {
                     break;
                 }
 
-                // Append the delimiter to our output buffer first.
+                // On ajoute d'abord le séparateur au résultat.
                 outstr.push_str(delim);
 
-                // Extract the actual ASCII bytes for this label and append them
-                // to the output buffer.
+                // On extrait les octets ASCII (les caractères) de ce label et
+                // on les ajoute au résultat.
                 let str_buffer = self.get_range(pos, len as usize)?;
                 outstr.push_str(&String::from_utf8_lossy(str_buffer).to_lowercase());
 
                 delim = ".";
 
-                // Move forward the full length of the label.
+                // On avance de toute la longueur du label.
                 pos += len as usize;
             }
         }
@@ -265,7 +267,9 @@ impl DnsHeader {
         self.authoritative_entries = buffer.read_u16()?;
         self.resource_entries = buffer.read_u16()?;
 
-        // Return the constant header size
+        // N.d.T. : commentaire d'origine obsolète (« renvoie la taille
+        // constante de l'en-tête »). La fonction se termine aujourd'hui
+        // simplement par Ok(()), qui signifie « tout s'est bien passé ».
         Ok(())
     }
 }
@@ -306,7 +310,7 @@ impl DnsQuestion {
     pub fn read(&mut self, buffer: &mut BytePacketBuffer) -> Result<()> {
         buffer.read_qname(&mut self.name)?;
         self.qtype = QueryType::from_num(buffer.read_u16()?); // qtype
-        let _ = buffer.read_u16()?; // class
+        let _ = buffer.read_u16()?; // classe
 
         Ok(())
     }

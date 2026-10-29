@@ -80,22 +80,26 @@ impl BytePacketBuffer {
         let max_jumps = 5;
         let mut jumps_performed = 0;
         loop {
-            // Dns Packets are untrusted data, so we need to be paranoid. Someone
-            // can craft a packet with a cycle in the jump instructions. This guards
-            // against such packets.
+            // Les paquets DNS sont des données non fiables : il faut donc être
+            // paranoïaque. Quelqu'un pourrait fabriquer un paquet dont les
+            // instructions de saut forment une boucle sans fin. Ce test protège
+            // contre ce type de paquet.
             if jumps_performed > max_jumps {
                 return Err(format!("Limit of {} jumps exceeded", max_jumps).into());
             }
 
             let len = self.get(pos)?;
 
-            // A two byte sequence, where the two highest bits of the first byte is
-            // set, represents a offset relative to the start of the buffer. We
-            // handle this by jumping to the offset, setting a flag to indicate
-            // that we shouldn't update the shared buffer position once done.
+            // Une séquence de deux octets dont les deux bits de poids fort du
+            // premier octet sont à 1 représente une position (offset) comptée
+            // depuis le début du tampon. On la traite en sautant à cette
+            // position, et en levant un indicateur qui signale qu'il ne faudra
+            // pas mettre à jour la position partagée du tampon une fois
+            // terminé.
             if (len & 0xC0) == 0xC0 {
-                // When a jump is performed, we only modify the shared buffer
-                // position once, and avoid making the change later on.
+                // Lors d'un saut, on ne modifie la position partagée du tampon
+                // qu'une seule fois, et on évite de la modifier de nouveau par
+                // la suite.
                 if !jumped {
                     self.seek(pos + 2)?;
                 }
@@ -110,7 +114,7 @@ impl BytePacketBuffer {
 
             pos += 1;
 
-            // Names are terminated by an empty label of length 0
+            // Les noms se terminent par un label vide de longueur 0
             if len == 0 {
                 break;
             }
@@ -287,7 +291,9 @@ impl DnsHeader {
         self.authoritative_entries = buffer.read_u16()?;
         self.resource_entries = buffer.read_u16()?;
 
-        // Return the constant header size
+        // N.d.T. : commentaire d'origine obsolète (« renvoie la taille
+        // constante de l'en-tête »). La fonction se termine aujourd'hui
+        // simplement par Ok(()), qui signifie « tout s'est bien passé ».
         Ok(())
     }
 
@@ -367,7 +373,7 @@ impl DnsQuestion {
     pub fn read(&mut self, buffer: &mut BytePacketBuffer) -> Result<()> {
         buffer.read_qname(&mut self.name)?;
         self.qtype = QueryType::from_num(buffer.read_u16()?); // qtype
-        let _ = buffer.read_u16()?; // class
+        let _ = buffer.read_u16()?; // classe
 
         Ok(())
     }
@@ -679,7 +685,7 @@ impl DnsPacket {
 }
 
 fn lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
-    // Forward queries to Google's public DNS
+    // Transmet les requêtes au DNS public de Google
     let server = ("8.8.8.8", 53);
 
     let socket = UdpSocket::bind(("0.0.0.0", 43210))?;
@@ -703,38 +709,39 @@ fn lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
     DnsPacket::from_buffer(&mut res_buffer)
 }
 
-/// Handle a single incoming packet
+/// Traite un seul paquet entrant
 fn handle_query(socket: &UdpSocket) -> Result<()> {
-    // With a socket ready, we can go ahead and read a packet. This will
-    // block until one is received.
+    // Le socket étant prêt, on peut lire un paquet. Cet appel est bloquant : le
+    // programme attend jusqu'à ce qu'un paquet arrive.
     let mut req_buffer = BytePacketBuffer::new();
 
-    // The `recv_from` function will write the data into the provided buffer,
-    // and return the length of the data read as well as the source address.
-    // We're not interested in the length, but we need to keep track of the
-    // source in order to send our reply later on.
+    // La fonction `recv_from` écrit les données dans le tampon fourni et
+    // renvoie la longueur des données lues ainsi que l'adresse de l'expéditeur.
+    // La longueur ne nous intéresse pas, mais il faut conserver l'adresse de
+    // l'expéditeur pour pouvoir lui répondre ensuite.
     let (_, src) = socket.recv_from(&mut req_buffer.buf)?;
 
-    // Next, `DnsPacket::from_buffer` is used to parse the raw bytes into
-    // a `DnsPacket`.
+    // Ensuite, `DnsPacket::from_buffer` sert à convertir les octets bruts en un
+    // `DnsPacket`.
     let mut request = DnsPacket::from_buffer(&mut req_buffer)?;
 
-    // Create and initialize the response packet
+    // Crée et initialise le paquet de réponse
     let mut packet = DnsPacket::new();
     packet.header.id = request.header.id;
     packet.header.recursion_desired = true;
     packet.header.recursion_available = true;
     packet.header.response = true;
 
-    // In the normal case, exactly one question is present
+    // Dans le cas normal, le paquet contient exactement une question
     if let Some(question) = request.questions.pop() {
         println!("Received query: {:?}", question);
 
-        // Since all is set up and as expected, the query can be forwarded to the
-        // target server. There's always the possibility that the query will
-        // fail, in which case the `SERVFAIL` response code is set to indicate
-        // as much to the client. If rather everything goes as planned, the
-        // question and response records as copied into our response packet.
+        // Tout étant en place et conforme, la requête peut être transmise au
+        // serveur cible. Il est toujours possible que la requête échoue : dans
+        // ce cas, on renvoie le code de réponse `SERVFAIL` pour en informer le
+        // client. Si au contraire tout se passe comme prévu, la question et les
+        // enregistrements de réponse sont recopiés dans notre paquet de
+        // réponse.
         if let Ok(result) = lookup(&question.name, question.qtype) {
             packet.questions.push(question);
             packet.header.rescode = result.header.rescode;
@@ -755,14 +762,14 @@ fn handle_query(socket: &UdpSocket) -> Result<()> {
             packet.header.rescode = ResultCode::SERVFAIL;
         }
     }
-    // Being mindful of how unreliable input data from arbitrary senders can be, we
-    // need make sure that a question is actually present. If not, we return `FORMERR`
-    // to indicate that the sender made something wrong.
+    // Les données reçues d'expéditeurs quelconques étant peu fiables, il faut
+    // vérifier qu'une question est bien présente. Sinon, on renvoie `FORMERR`
+    // pour signaler que l'expéditeur a envoyé une requête mal formée.
     else {
         packet.header.rescode = ResultCode::FORMERR;
     }
 
-    // The only thing remaining is to encode our response and send it off!
+    // Il ne reste plus qu'à encoder notre réponse et à l'envoyer !
     let mut res_buffer = BytePacketBuffer::new();
     packet.write(&mut res_buffer)?;
 
@@ -775,11 +782,11 @@ fn handle_query(socket: &UdpSocket) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    // Bind an UDP socket on port 2053
+    // Ouvre un socket UDP sur le port 2053
     let socket = UdpSocket::bind(("0.0.0.0", 2053))?;
 
-    // For now, queries are handled sequentially, so an infinite loop for servicing
-    // requests is initiated.
+    // Pour l'instant, les requêtes sont traitées l'une après l'autre : on lance
+    // donc une boucle infinie qui les sert successivement.
     loop {
         match handle_query(&socket) {
             Ok(_) => {}

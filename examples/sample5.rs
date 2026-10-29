@@ -80,22 +80,26 @@ impl BytePacketBuffer {
         let max_jumps = 5;
         let mut jumps_performed = 0;
         loop {
-            // Dns Packets are untrusted data, so we need to be paranoid. Someone
-            // can craft a packet with a cycle in the jump instructions. This guards
-            // against such packets.
+            // Les paquets DNS sont des données non fiables : il faut donc être
+            // paranoïaque. Quelqu'un pourrait fabriquer un paquet dont les
+            // instructions de saut forment une boucle sans fin. Ce test protège
+            // contre ce type de paquet.
             if jumps_performed > max_jumps {
                 return Err(format!("Limit of {} jumps exceeded", max_jumps).into());
             }
 
             let len = self.get(pos)?;
 
-            // A two byte sequence, where the two highest bits of the first byte is
-            // set, represents a offset relative to the start of the buffer. We
-            // handle this by jumping to the offset, setting a flag to indicate
-            // that we shouldn't update the shared buffer position once done.
+            // Une séquence de deux octets dont les deux bits de poids fort du
+            // premier octet sont à 1 représente une position (offset) comptée
+            // depuis le début du tampon. On la traite en sautant à cette
+            // position, et en levant un indicateur qui signale qu'il ne faudra
+            // pas mettre à jour la position partagée du tampon une fois
+            // terminé.
             if (len & 0xC0) == 0xC0 {
-                // When a jump is performed, we only modify the shared buffer
-                // position once, and avoid making the change later on.
+                // Lors d'un saut, on ne modifie la position partagée du tampon
+                // qu'une seule fois, et on évite de la modifier de nouveau par
+                // la suite.
                 if !jumped {
                     self.seek(pos + 2)?;
                 }
@@ -110,7 +114,7 @@ impl BytePacketBuffer {
 
             pos += 1;
 
-            // Names are terminated by an empty label of length 0
+            // Les noms se terminent par un label vide de longueur 0
             if len == 0 {
                 break;
             }
@@ -287,7 +291,9 @@ impl DnsHeader {
         self.authoritative_entries = buffer.read_u16()?;
         self.resource_entries = buffer.read_u16()?;
 
-        // Return the constant header size
+        // N.d.T. : commentaire d'origine obsolète (« renvoie la taille
+        // constante de l'en-tête »). La fonction se termine aujourd'hui
+        // simplement par Ok(()), qui signifie « tout s'est bien passé ».
         Ok(())
     }
 
@@ -367,7 +373,7 @@ impl DnsQuestion {
     pub fn read(&mut self, buffer: &mut BytePacketBuffer) -> Result<()> {
         buffer.read_qname(&mut self.name)?;
         self.qtype = QueryType::from_num(buffer.read_u16()?); // qtype
-        let _ = buffer.read_u16()?; // class
+        let _ = buffer.read_u16()?; // classe
 
         Ok(())
     }
@@ -677,9 +683,10 @@ impl DnsPacket {
         Ok(())
     }
 
-    /// It's useful to be able to pick a random A record from a packet. When we
-    /// get multiple IP's for a single name, it doesn't matter which one we
-    /// choose, so in those cases we can now pick one at random.
+    /// Il est utile de pouvoir choisir un enregistrement A au hasard dans un
+    /// paquet. Quand on obtient plusieurs IP pour un même nom, peu importe
+    /// laquelle on retient : on peut donc en prendre une au hasard. (N.d.T. :
+    /// en pratique, ce code prend simplement la première.)
     pub fn get_random_a(&self) -> Option<Ipv4Addr> {
         self.answers
             .iter()
@@ -690,55 +697,61 @@ impl DnsPacket {
             .next()
     }
 
-    /// A helper function which returns an iterator over all name servers in
-    /// the authorities section, represented as (domain, host) tuples
+    /// Fonction utilitaire qui renvoie un itérateur sur tous les serveurs de
+    /// noms de la section Autorité, sous forme de couples (domaine, hôte)
     fn get_ns<'a>(&'a self, qname: &'a str) -> impl Iterator<Item = (&'a str, &'a str)> {
         self.authorities
             .iter()
-            // In practice, these are always NS records in well formed packages.
-            // Convert the NS records to a tuple which has only the data we need
-            // to make it easy to work with.
+            // En pratique, ce sont toujours des enregistrements NS dans les
+            // paquets bien formés. On convertit chaque enregistrement NS en un
+            // couple ne contenant que les données utiles, pour simplifier la
+            // suite.
             .filter_map(|record| match record {
                 DnsRecord::NS { domain, host, .. } => Some((domain.as_str(), host.as_str())),
                 _ => None,
             })
-            // Discard servers which aren't authoritative to our query
+            // On écarte les serveurs qui ne font pas autorité pour notre
+            // requête
             .filter(move |(domain, _)| qname.ends_with(*domain))
     }
 
-    /// We'll use the fact that name servers often bundle the corresponding
-    /// A records when replying to an NS query to implement a function that
-    /// returns the actual IP for an NS record if possible.
+    /// Les serveurs de noms joignent souvent les enregistrements A
+    /// correspondants lorsqu'ils répondent avec des NS. On en profite pour
+    /// écrire une fonction qui renvoie, si possible, l'adresse IP effective
+    /// d'un enregistrement NS.
     pub fn get_resolved_ns(&self, qname: &str) -> Option<Ipv4Addr> {
-        // Get an iterator over the nameservers in the authorities section
+        // Itérateur sur les serveurs de noms de la section Autorité
         self.get_ns(qname)
-            // Now we need to look for a matching A record in the additional
-            // section. Since we just want the first valid record, we can just
-            // build a stream of matching records.
+            // Il faut maintenant chercher un enregistrement A correspondant
+            // dans la section Additionnelle. Comme seul le premier
+            // enregistrement valide nous intéresse, il suffit de construire un
+            // flux des enregistrements qui correspondent.
             .flat_map(|(_, host)| {
                 self.resources
                     .iter()
-                    // Filter for A records where the domain match the host
-                    // of the NS record that we are currently processing
+                    // On ne garde que les enregistrements A dont le domaine
+                    // correspond à l'hôte de l'enregistrement NS en cours de
+                    // traitement
                     .filter_map(move |record| match record {
                         DnsRecord::A { domain, addr, .. } if domain == host => Some(addr),
                         _ => None,
                     })
             })
             .map(|addr| *addr)
-            // Finally, pick the first valid entry
+            // Enfin, on prend la première entrée valide
             .next()
     }
 
-    /// However, not all name servers are as that nice. In certain cases there won't
-    /// be any A records in the additional section, and we'll have to perform *another*
-    /// lookup in the midst. For this, we introduce a method for returning the host
-    /// name of an appropriate name server.
+    /// Cependant, tous les serveurs de noms ne sont pas aussi aimables.
+    /// Parfois, la section Additionnelle ne contient aucun enregistrement A, et
+    /// il faut effectuer une *autre* résolution en cours de route. Pour cela,
+    /// on ajoute une méthode qui renvoie le nom d'hôte d'un serveur de noms
+    /// approprié.
     pub fn get_unresolved_ns<'a>(&'a self, qname: &'a str) -> Option<&'a str> {
-        // Get an iterator over the nameservers in the authorities section
+        // Itérateur sur les serveurs de noms de la section Autorité
         self.get_ns(qname)
             .map(|(_, host)| host)
-            // Finally, pick the first valid entry
+            // Enfin, on prend la première entrée valide
             .next()
     }
 }
@@ -766,53 +779,60 @@ fn lookup(qname: &str, qtype: QueryType, server: (Ipv4Addr, u16)) -> Result<DnsP
 }
 
 fn recursive_lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
-    // For now we're always starting with *a.root-servers.net*.
+    // Pour l'instant, on commence toujours par *a.root-servers.net*.
     let mut ns = "198.41.0.4".parse::<Ipv4Addr>().unwrap();
 
-    // Since it might take an arbitrary number of steps, we enter an unbounded loop.
+    // Le nombre d'étapes n'étant pas connu à l'avance, on entre dans une boucle
+    // sans limite.
     loop {
         println!("attempting lookup of {:?} {} with ns {}", qtype, qname, ns);
 
-        // The next step is to send the query to the active server.
+        // L'étape suivante consiste à envoyer la requête au serveur courant.
         let ns_copy = ns;
 
         let server = (ns_copy, 53);
         let response = lookup(qname, qtype, server)?;
 
-        // If there are entries in the answer section, and no errors, we are done!
+        // Si la section Réponse contient des entrées et qu'il n'y a pas
+        // d'erreur, c'est terminé !
         if !response.answers.is_empty() && response.header.rescode == ResultCode::NOERROR {
             return Ok(response);
         }
 
-        // We might also get a `NXDOMAIN` reply, which is the authoritative name servers
-        // way of telling us that the name doesn't exist.
+        // On peut aussi recevoir une réponse `NXDOMAIN` : c'est la façon dont
+        // le serveur de noms faisant autorité nous indique que le nom n'existe
+        // pas.
         if response.header.rescode == ResultCode::NXDOMAIN {
             return Ok(response);
         }
 
-        // Otherwise, we'll try to find a new nameserver based on NS and a corresponding A
-        // record in the additional section. If this succeeds, we can switch name server
-        // and retry the loop.
+        // Sinon, on cherche un nouveau serveur de noms à partir d'un
+        // enregistrement NS et de l'enregistrement A correspondant dans la
+        // section Additionnelle. Si on en trouve un, on change de serveur de
+        // noms et on recommence la boucle.
         if let Some(new_ns) = response.get_resolved_ns(qname) {
             ns = new_ns;
 
             continue;
         }
 
-        // If not, we'll have to resolve the ip of a NS record. If no NS records exist,
-        // we'll go with what the last server told us.
+        // Sinon, il faut résoudre l'adresse IP d'un enregistrement NS. S'il n'y
+        // a aucun enregistrement NS, on s'en tient à ce que le dernier serveur
+        // nous a répondu.
         let new_ns_name = match response.get_unresolved_ns(qname) {
             Some(x) => x,
             None => return Ok(response),
         };
 
-        // Here we go down the rabbit hole by starting _another_ lookup sequence in the
-        // midst of our current one. Hopefully, this will give us the IP of an appropriate
-        // name server.
+        // On s'enfonce ici d'un niveau en lançant une _autre_ séquence de
+        // résolution au beau milieu de la séquence en cours. Avec un peu de
+        // chance, elle nous donnera l'adresse IP d'un serveur de noms
+        // approprié.
         let recursive_response = recursive_lookup(&new_ns_name, QueryType::A)?;
 
-        // Finally, we pick a random ip from the result, and restart the loop. If no such
-        // record is available, we again return the last result we got.
+        // Enfin, on choisit une adresse IP au hasard dans le résultat et on
+        // relance la boucle. Si aucun enregistrement de ce type n'est
+        // disponible, on renvoie là encore le dernier résultat obtenu.
         if let Some(new_ns) = recursive_response.get_random_a() {
             ns = new_ns;
         } else {

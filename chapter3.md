@@ -1,13 +1,16 @@
-3 - Adding more Record Types
-============================
+3 - Ajouter d'autres types d'enregistrements
+============================================
 
-Let's use our program to do a lookup for ''yahoo.com''.
+Utilisons notre programme pour rechercher « yahoo.com ».
+
+> **N.d.T.** — Il suffit pour cela de modifier, dans la fonction `main` du
+> chapitre 2, la ligne qui définit le nom recherché :
 
 ```rust
 let qname = "www.yahoo.com";
 ```
 
-Running it yields:
+L'exécution donne :
 
 ```text
 DnsHeader {
@@ -49,23 +52,44 @@ A {
 }
 ```
 
-That's odd -- we're getting an UNKNOWN record as well as two A records. The
-UNKNOWN record, with query type 5 is a CNAME. There are quite a few DNS record
-types, many of which doesn't see any use in practice. That said, let's have
-a look at a few essential ones:
+Étrange : nous obtenons un enregistrement UNKNOWN (inconnu) en plus de deux
+enregistrements A. L'enregistrement UNKNOWN, de type 5, est un CNAME. Il existe
+un bon nombre de types d'enregistrements DNS, dont beaucoup ne sont jamais
+utilisés en pratique. Cela dit, jetons un œil à quelques-uns, essentiels :
 
-| ID  | Name  | Description                                              | Encoding                                         |
-| --- | ----- | -------------------------------------------------------- | ------------------------------------------------ |
-| 1   | A     | Alias - Mapping names to IP addresses                    | Preamble + Four bytes for IPv4 adress            |
-| 2   | NS    | Name Server - The DNS server address for a domain        | Preamble + Label Sequence                        |
-| 5   | CNAME | Canonical Name - Maps names to names                     | Preamble + Label Sequence                        |
-| 15  | MX    | Mail eXchange - The host of the mail server for a domain | Preamble + 2-bytes for priority + Label Sequence |
-| 28  | AAAA  | IPv6 alias                                               | Premable + Sixteen bytes for IPv6 adress         |
+| ID  | Nom   | Description                                                             | Encodage                                               |
+| --- | ----- | ----------------------------------------------------------------------- | ------------------------------------------------------ |
+| 1   | A     | Alias - Associe des noms à des adresses IP                              | Préambule + 4 octets pour l'adresse IPv4               |
+| 2   | NS    | Name Server - L'adresse du serveur DNS d'un domaine                     | Préambule + séquence de labels                         |
+| 5   | CNAME | Canonical Name (nom canonique) - Associe des noms à d'autres noms       | Préambule + séquence de labels                         |
+| 15  | MX    | Mail eXchange - L'hôte du serveur de messagerie d'un domaine            | Préambule + 2 octets de priorité + séquence de labels  |
+| 28  | AAAA  | Alias IPv6                                                              | Préambule + 16 octets pour l'adresse IPv6              |
 
-### Extending QueryType with more record types
+> **Note du traducteur — Les types d'enregistrements en pratique**
+>
+> - **A** : dans la norme, « A » signifie *Address* (adresse), et non « Alias »
+>   comme l'écrit l'auteur ; c'est l'enregistrement qui donne l'adresse IPv4
+>   d'un nom. Le véritable alias, c'est le CNAME.
+> - **NS** (*Name Server*) : indique quel serveur DNS gère un domaine, un peu
+>   comme le nom du service qui tient le registre d'une commune.
+> - **CNAME** : un alias, qui dit « ce nom est un autre nom pour… ». Ici,
+>   `www.yahoo.com` renvoie vers `fd-fp3.wg1.b.yahoo.com`, qui porte, lui, les
+>   adresses IP. C'est le principe d'une domiciliation : on écrit à une adresse,
+>   le courrier est réexpédié vers l'adresse réelle.
+> - **MX** (*Mail eXchange*) : indique quel serveur reçoit les courriels d'un
+>   domaine (pour une adresse `contact@exemple.fr`, c'est l'enregistrement MX
+>   de `exemple.fr` qui est consulté). La **priorité** permet d'en déclarer
+>   plusieurs : la plus petite valeur est essayée en premier.
+> - **AAAA** : l'équivalent de A pour les adresses **IPv6**, la nouvelle
+>   génération d'adresses Internet, beaucoup plus longues (16 octets au lieu de
+>   4), et notées en groupes hexadécimaux séparés par `:` (par exemple
+>   `2001:503:231d::2:30`). Le nom « AAAA » vient de ce qu'une adresse IPv6
+>   est quatre fois plus longue qu'une adresse IPv4.
 
-Let's go ahead and add them to our code! First we'll update our `QueryType`
-enum:
+### Ajouter des types d'enregistrements à QueryType
+
+Ajoutons-les à notre code ! Commençons par mettre à jour notre énumération
+`QueryType` :
 
 ```rust
 #[derive(PartialEq, Eq, Debug, Clone, Hash, Copy)]
@@ -79,7 +103,7 @@ pub enum QueryType {
 }
 ```
 
-We'll also need to change our utility functions.
+Il faut aussi modifier nos fonctions utilitaires.
 
 ```rust
 impl QueryType {
@@ -107,10 +131,10 @@ impl QueryType {
 }
 ```
 
-### Extending DnsRecord for reading new record types
+### Étendre DnsRecord pour lire les nouveaux types d'enregistrements
 
-Now we need a way of holding the data for these records, so we'll make some
-modifications to `DnsRecord`.
+Il nous faut maintenant un moyen de stocker les données de ces enregistrements ;
+nous apportons donc quelques modifications à `DnsRecord`.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -151,9 +175,15 @@ pub enum DnsRecord {
 }
 ```
 
-Here comes the bulk of the work. We'll need to extend the functions for writing
-and reading records. Starting with read, we amend it with additional code for
-each record type. First off, we've got the common preamble:
+> **N.d.T.** — Chaque variante de l'énumération décrit les informations propres
+> à un type d'enregistrement : `addr` (l'adresse) pour A et AAAA, `host` (le nom
+> d'hôte vers lequel pointe l'enregistrement) pour NS et CNAME, `priority` et
+> `host` pour MX. Tous ont en commun `domain` (le nom concerné) et `ttl`.
+
+Voici le gros du travail. Nous devons étendre les fonctions d'écriture et de
+lecture des enregistrements. En commençant par la lecture, nous la complétons
+avec du code supplémentaire pour chaque type d'enregistrement. Tout d'abord, on
+lit le préambule commun :
 
 ```rust
 impl DnsRecord {
@@ -250,23 +280,31 @@ impl DnsRecord {
         }
     }
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 }
 ```
 
-It's a bit of a mouthful, but there are no especially complicated records in
-their own right -- it's seeing them all together that makes it look a bit
-unwieldy.
+C'est un peu indigeste, mais aucun de ces enregistrements n'est particulièrement
+compliqué en soi ; c'est de les voir tous ensemble qui rend le code un peu
+lourd.
 
-### Extending BytePacketBuffer for setting values in place
+> **N.d.T.** — Le principe est toujours le même : après le préambule commun, un
+> `match` aiguille vers la lecture adaptée au type. Pour AAAA, on lit 16 octets
+> sous forme de quatre blocs de 4 octets (`read_u32`), que l'on redécoupe en
+> huit groupes de 2 octets : ce sont les huit groupes séparés par `:` dans
+> l'écriture habituelle d'une adresse IPv6. Pour NS, CNAME et MX, les données
+> contiennent un nom de domaine, que l'on lit avec `read_qname`, exactement
+> comme le nom du préambule.
 
-Before we move on to writing records, we'll have to add two more functions to
-`BytePacketBuffer`:
+### Étendre BytePacketBuffer pour modifier des valeurs sur place
+
+Avant de passer à l'écriture des enregistrements, nous devons ajouter deux
+fonctions supplémentaires à `BytePacketBuffer` :
 
 ```rust
 impl BytePacketBuffer {
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
     fn set(&mut self, pos: usize, val: u8) -> Result<()> {
         self.buf[pos] = val;
@@ -284,19 +322,28 @@ impl BytePacketBuffer {
 }
 ```
 
-When writing the labels of a record, we don't know ahead of time the number of
-bytes needed, since we might end up using jumps to compress the size. We'll
-solve this by writing a zero size and then going back to fill in the size
-needed.
+Lorsque nous écrivons les labels d'un enregistrement, nous ne connaissons pas à
+l'avance le nombre d'octets nécessaires, puisque nous pourrions être amenés à
+utiliser des sauts pour réduire la taille. Nous résolvons ce problème en
+écrivant d'abord une taille nulle, puis en revenant en arrière pour y inscrire
+la taille réelle.
 
-### Extending DnsRecord for writing new record types
+> **N.d.T.** — C'est la technique du sommaire dont on laisse les numéros de page
+> en blanc, pour les compléter une fois le document terminé : on note la
+> position de l'emplacement réservé (`pos`), on y écrit provisoirement 0, on
+> écrit les données, puis `set_u16` revient à cette position pour y inscrire la
+> longueur réellement écrite. Contrairement à `write`, les fonctions `set` ne
+> déplacent pas le curseur.
 
-Now we can amend `DnsRecord::write`. Here's our new function:
+### Étendre DnsRecord pour écrire les nouveaux types d'enregistrements
+
+Nous pouvons maintenant compléter `DnsRecord::write`. Voici notre nouvelle
+fonction :
 
 ```rust
 impl DnsRecord {
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
     pub fn write(&self, buffer: &mut BytePacketBuffer) -> Result<usize> {
         let start_pos = buffer.pos();
@@ -400,13 +447,13 @@ impl DnsRecord {
 }
 ```
 
-Again, quite a bit of extra code, but thankfully the last thing we've got to
-do. We're still not using the write part, but it'll come in handy once we write
-our server.
+Encore pas mal de code supplémentaire, mais c'est heureusement la dernière chose
+à faire. Nous n'utilisons toujours pas la partie écriture, mais elle nous sera
+utile lorsque nous écrirons notre serveur.
 
-### Testing the new record types
+### Tester les nouveaux types d'enregistrements
 
-Now we're ready to retry our ''yahoo.com'' query:
+Nous sommes prêts à relancer notre requête sur « yahoo.com » :
 
 ```text
 DnsHeader {
@@ -447,17 +494,22 @@ A {
 }
 ```
 
-For good measure, let's try doing an MX lookup as well:
+> **N.d.T.** — L'enregistrement inconnu de tout à l'heure est désormais reconnu
+> comme un CNAME : `www.yahoo.com` est un alias de `fd-fp3.wg1.b.yahoo.com`,
+> qui possède deux adresses IP. Avoir plusieurs adresses pour un même nom
+> permet de répartir la charge entre plusieurs serveurs.
+
+Pour faire bonne mesure, essayons aussi une recherche de type MX :
 
 ```rust
 let qname = "yahoo.com";
 let qtype = QueryType::MX;
 ```
 
-Which yields:
+Ce qui donne :
 
 ```text
-- snip -
+- (coupé) -
 DnsQuestion {
     name: "yahoo.com",
     qtype: MX
@@ -482,4 +534,14 @@ MX {
 }
 ```
 
-Next up: [Chapter 4 - Baby's first DNS server](/chapter4.md)
+> **Note du traducteur — Lancer cet exemple**
+>
+> Le programme complet est dans `examples/sample3.rs` ; il effectue directement
+> la recherche MX sur `yahoo.com` : `cargo run --example sample3`. Il utilise un
+> affichage compact (`{:?}`, une ligne par élément) au lieu de l'affichage
+> détaillé (`{:#?}`) montré ci-dessus. Pour tester d'autres noms ou d'autres
+> types, modifiez les lignes `qname` et `qtype` au début de la fonction
+> `main` ; vous pouvez par exemple essayer le nom de domaine de votre propre
+> site, avec le type A, puis MX.
+
+Prochaine étape : [Chapitre 4 - Mon premier serveur DNS](chapter4.md)

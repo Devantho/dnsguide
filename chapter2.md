@@ -1,23 +1,42 @@
-2 - Building a stub resolver
-============================
+2 - Construire un résolveur minimal (*stub resolver*)
+====================================================
 
-While it's slightly satisfying to know that we're able to successfully parse DNS
-packets, it's not much use to just read them off disk. As our next step, we'll
-use it to build a `stub resolver`, which is a DNS client that doesn't feature
-any built-in support for recursive lookup and that will only work with a DNS
-server that does. Later we'll implement an actual recursive resolver to lose
-the need for a server.
+S'il est assez satisfaisant de savoir que nous sommes capables de décoder des
+paquets DNS, se contenter de les lire depuis un fichier n'a pas grand intérêt.
+Prochaine étape : nous allons nous en servir pour construire un `stub resolver`
+(résolveur minimal), c'est-à-dire un client DNS qui ne sait pas effectuer
+lui-même de recherche récursive et qui ne fonctionne qu'avec un serveur DNS qui,
+lui, en est capable. Plus tard, nous implémenterons un véritable résolveur
+récursif pour nous passer de ce serveur.
 
-### Extending BytePacketBuffer for writing
+> **Note du traducteur — Qu'est-ce qu'un résolveur minimal ?**
+>
+> Un **résolveur** est le programme qui « résout » un nom, c'est-à-dire qui
+> trouve l'adresse IP correspondante. Le résolveur *minimal* ne fait pas la
+> recherche lui-même : il pose la question à un serveur DNS plus complet (ici
+> celui de Google, `8.8.8.8`) et se contente de lire la réponse. C'est ce que
+> fait votre ordinateur au quotidien : il délègue la recherche au serveur DNS
+> de votre box ou de votre fournisseur d'accès, comme on demande un
+> renseignement à un guichet plutôt que de fouiller soi-même les archives.
+>
+> Concrètement, ce chapitre ajoute la fonction inverse de la lecture :
+> l'**écriture** d'un paquet, pour pouvoir envoyer nos propres questions.
 
-In order to be able to service a query, we need to be able to not just read
-packets, but also write them. To do so, we'll need to extend `BytePacketBuffer`
-with some additional methods:
+### Étendre BytePacketBuffer pour l'écriture
+
+Pour pouvoir traiter une requête, nous devons être capables non seulement de
+lire des paquets, mais aussi d'en écrire. Pour cela, il nous faut ajouter
+quelques méthodes à `BytePacketBuffer` :
+
+> **N.d.T.** — Dans les extraits de code, la mention
+> `- (code déjà présenté, omis ici) -` n'est pas du code : elle remplace les
+> parties vues au chapitre précédent, pour ne montrer que les ajouts. Le code
+> complet de chaque chapitre se trouve dans le dossier `examples/`.
 
 ```rust
 impl BytePacketBuffer {
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
     fn write(&mut self, val: u8) -> Result<()> {
         if self.pos >= 512 {
@@ -51,7 +70,14 @@ impl BytePacketBuffer {
     }
 ```
 
-We'll also need a function for writing query names in labeled form:
+> **N.d.T.** — Ces fonctions font l'inverse de leurs équivalents de lecture :
+> `write` écrit un octet à la position courante puis avance le curseur ;
+> `write_u16` et `write_u32` découpent un nombre de 2 ou 4 octets en octets
+> successifs, en commençant par l'octet de poids fort (`>>` décale vers la
+> droite, `& 0xFF` ne garde que le dernier octet).
+
+Il nous faut aussi une fonction pour écrire les noms demandés sous forme de
+labels :
 
 ```rust
     fn write_qname(&mut self, qname: &str) -> Result<()> {
@@ -72,18 +98,26 @@ We'll also need a function for writing query names in labeled form:
         Ok(())
     }
 
-} // End of BytePacketBuffer
+} // Fin de BytePacketBuffer
 ```
 
-### Extending DnsHeader for writing
+> **N.d.T.** — `qname.split('.')` découpe le nom à chaque point (`google.com`
+> devient `google` et `com`). Pour chaque label, on écrit sa longueur puis ses
+> caractères, et on termine par un octet nul : on obtient bien
+> `[6]google[3]com[0]`. La limite de `0x3f` (63 en décimal) correspond à la
+> longueur maximale d'un label autorisée par la norme. Remarque : cette version
+> n'utilise pas la compression par sauts vue au chapitre 1 ; les paquets
+> produits sont donc un peu plus longs, mais restent parfaitement valides.
 
-Building on our new functions we can extend our protocol representation
-structs. Starting with `DnsHeader`:
+### Étendre DnsHeader pour l'écriture
+
+En nous appuyant sur ces nouvelles fonctions, nous pouvons compléter les
+structures qui représentent notre protocole. Commençons par `DnsHeader` :
 
 ```rust
 impl DnsHeader {
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
     pub fn write(&self, buffer: &mut BytePacketBuffer) -> Result<()> {
         buffer.write_u16(self.id)?;
@@ -115,14 +149,19 @@ impl DnsHeader {
 }
 ```
 
-### Extending DnsQuestion for writing
+> **N.d.T.** — C'est l'opération inverse de la lecture vue au chapitre 1 :
+> chaque drapeau (`true`/`false`, converti en 1/0 par `as u8`) est décalé à sa
+> place (`<< 1`, `<< 2`…) puis tous sont assemblés avec `|` pour reformer les
+> deux octets de drapeaux.
 
-Moving on to `DnsQuestion`:
+### Étendre DnsQuestion pour l'écriture
+
+Passons à `DnsQuestion` :
 
 ```rust
 impl DnsQuestion {
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
     pub fn write(&self, buffer: &mut BytePacketBuffer) -> Result<()> {
         buffer.write_qname(&self.name)?;
@@ -137,15 +176,19 @@ impl DnsQuestion {
 }
 ```
 
-### Extending DnsRecord for writing
+> **N.d.T.** — `buffer.write_u16(1)` écrit la classe, toujours égale à 1
+> (`IN`, Internet).
 
-`DnsRecord` is for now quite compact as well, although we'll eventually add
-quite a bit of code here to handle different record types:
+### Étendre DnsRecord pour l'écriture
+
+`DnsRecord` reste pour l'instant assez compact lui aussi, même si nous finirons
+par y ajouter pas mal de code pour gérer les différents types
+d'enregistrements :
 
 ```rust
 impl DnsRecord {
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
     pub fn write(&self, buffer: &mut BytePacketBuffer) -> Result<usize> {
         let start_pos = buffer.pos();
@@ -179,14 +222,21 @@ impl DnsRecord {
 }
 ```
 
-### Extending DnsPacket for writing
+> **N.d.T.** — Pour un enregistrement A, on écrit le préambule (nom, type,
+> classe 1, TTL, longueur 4) puis les 4 octets de l'adresse IP (`octets()`
+> renvoie les quatre nombres de l'adresse). Les enregistrements de type inconnu
+> ne peuvent pas être réécrits : ils sont ignorés, avec un message
+> (*Skipping record* = « enregistrement ignoré »). La fonction renvoie le
+> nombre d'octets écrits (position finale moins position de départ).
 
-Putting it all together in `DnsPacket`:
+### Étendre DnsPacket pour l'écriture
+
+Assemblons le tout dans `DnsPacket` :
 
 ```rust
 impl DnsPacket {
 
-    - snip -
+    - (code déjà présenté, omis ici) -
 
     pub fn write(&mut self, buffer: &mut BytePacketBuffer) -> Result<()> {
         self.header.questions = self.questions.len() as u16;
@@ -215,25 +265,37 @@ impl DnsPacket {
 }
 ```
 
-### Implementing a stub resolver
+> **N.d.T.** — Avant d'écrire l'en-tête, on met à jour ses quatre compteurs à
+> partir de la longueur réelle des listes (`len()`), pour garantir que
+> l'en-tête annonce exactement ce que contient le paquet. On écrit ensuite les
+> sections dans l'ordre imposé par le format.
 
-We're ready to implement our stub resolver. Rust includes a convenient
-`UDPSocket` which does most of the work.
+### Implémenter un résolveur minimal
+
+Nous sommes prêts à implémenter notre résolveur minimal. Rust fournit un
+`UDPSocket` bien pratique, qui fait l'essentiel du travail.
+
+> **N.d.T.** — Un **socket** est le « point de branchement » d'un programme sur
+> le réseau : on l'ouvre sur un port local (ici 43210, choisi arbitrairement),
+> puis on s'en sert pour envoyer (`send_to`) et recevoir (`recv_from`) des
+> paquets. `0.0.0.0` signifie « sur toutes les interfaces réseau de cette
+> machine ».
 
 ```rust
 fn main() -> Result<()> {
-    // Perform an A query for google.com
+    // Effectue une requête de type A pour google.com
     let qname = "google.com";
     let qtype = QueryType::A;
 
-    // Using googles public DNS server
+    // On utilise le serveur DNS public de Google
     let server = ("8.8.8.8", 53);
 
-    // Bind a UDP socket to an arbitrary port
+    // Ouvre un socket UDP sur un port choisi arbitrairement
     let socket = UdpSocket::bind(("0.0.0.0", 43210))?;
 
-    // Build our query packet. It's important that we remember to set the
-    // `recursion_desired` flag. As noted earlier, the packet id is arbitrary.
+    // Construit notre paquet de requête. Il ne faut pas oublier d'activer le
+    // drapeau `recursion_desired` (récursion souhaitée). Comme indiqué plus
+    // haut, l'identifiant du paquet est arbitraire.
     let mut packet = DnsPacket::new();
 
     packet.header.id = 6666;
@@ -243,20 +305,22 @@ fn main() -> Result<()> {
         .questions
         .push(DnsQuestion::new(qname.to_string(), qtype));
 
-    // Use our new write method to write the packet to a buffer...
+    // On utilise notre nouvelle méthode write pour écrire le paquet dans un
+    // tampon...
     let mut req_buffer = BytePacketBuffer::new();
     packet.write(&mut req_buffer)?;
 
-    // ...and send it off to the server using our socket:
+    // ...puis on l'envoie au serveur via notre socket :
     socket.send_to(&req_buffer.buf[0..req_buffer.pos], server)?;
 
-    // To prepare for receiving the response, we'll create a new `BytePacketBuffer`,
-    // and ask the socket to write the response directly into our buffer.
+    // Pour préparer la réception de la réponse, on crée un nouveau
+    // `BytePacketBuffer` et on demande au socket d'écrire la réponse
+    // directement dans ce tampon.
     let mut res_buffer = BytePacketBuffer::new();
     socket.recv_from(&mut res_buffer.buf)?;
 
-    // As per the previous section, `DnsPacket::from_buffer()` is then used to
-    // actually parse the packet after which we can print the response.
+    // Comme au chapitre précédent, `DnsPacket::from_buffer()` sert ensuite à
+    // décoder le paquet, après quoi on peut afficher la réponse.
     let res_packet = DnsPacket::from_buffer(&mut res_buffer)?;
     println!("{:#?}", res_packet.header);
 
@@ -277,7 +341,12 @@ fn main() -> Result<()> {
 }
 ```
 
-Running it will print:
+> **N.d.T.** — `&req_buffer.buf[0..req_buffer.pos]` désigne uniquement les
+> octets effectivement écrits (de la position 0 jusqu'au curseur), et non les
+> 512 octets du tampon. Le nombre `6666` est l'identifiant du paquet, choisi
+> arbitrairement : la réponse du serveur reprendra ce même identifiant.
+
+L'exécution affiche :
 
 ```text
 DnsHeader {
@@ -308,4 +377,14 @@ A {
 }
 ```
 
-The next chapter covers implementing a richer set of record types: [Chapter 3 - Adding more Record Types](/chapter3.md)
+> **Note du traducteur — Lancer cet exemple**
+>
+> Le programme complet est dans `examples/sample2.rs` : lancez-le avec
+> `cargo run --example sample2`. Il a besoin d'un accès à Internet. Certains
+> réseaux d'entreprise bloquent les requêtes DNS vers des serveurs extérieurs
+> (port 53 en UDP) : si le programme semble attendre indéfiniment, c'est
+> probablement la cause, et il faudra l'essayer depuis une autre connexion.
+> L'adresse IP et le TTL obtenus seront différents de ceux affichés ci-dessus.
+
+Le chapitre suivant ajoute la prise en charge d'un éventail plus riche de types
+d'enregistrements : [Chapitre 3 - Ajouter d'autres types d'enregistrements](chapter3.md)

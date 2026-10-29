@@ -1,31 +1,56 @@
-4 - Baby's first DNS server
+4 - Mon premier serveur DNS
 ===========================
 
-Haven gotten this far, we're ready to make our first attempt at writing an
-actual server. Real DNS servers come in two different varieties:
+Arrivés jusqu'ici, nous sommes prêts à faire une première tentative d'écriture
+d'un véritable serveur. Dans la réalité, les serveurs DNS se déclinent en deux
+variétés :
 
- * Authoritative Server - A DNS server hosting one or more "zones". For
-   instance, the authoritative servers for the zone google.com are
-   ns1.google.com, ns2.google.com, ns3.google.com and ns4.google.com.
- * Caching Server - A DNS server that services DNS lookups by first checking
-   its cache to see if it already knows of the record being requested, and if
-   not performing a recursive lookup to figure it out. This includes the DNS
-   server that is likely running on your home router as well as the DNS server
-   that your ISP assigns to you through DHCP, and Google's public DNS servers
-   8.8.8.8 and 8.8.4.4.
+ * Serveur faisant autorité (*Authoritative Server*) - Un serveur DNS qui
+   héberge une ou plusieurs « zones ». Par exemple, les serveurs faisant
+   autorité pour la zone google.com sont ns1.google.com, ns2.google.com,
+   ns3.google.com et ns4.google.com.
+ * Serveur cache (*Caching Server*) - Un serveur DNS qui traite les recherches
+   en vérifiant d'abord dans son cache s'il connaît déjà l'enregistrement
+   demandé, et sinon, en effectuant une recherche récursive pour le trouver.
+   C'est le cas du serveur DNS qui tourne probablement sur votre box ou votre
+   routeur, du serveur DNS que votre fournisseur d'accès vous attribue via
+   DHCP, ainsi que des serveurs DNS publics de Google, 8.8.8.8 et 8.8.4.4.
 
-Strictly speaking, there's nothing to stop a server from doing both things, but
-in practice these two roles are typically mutually exclusive. This also explains
-the significance of the flags `RD` (Recursion Desired) and `RA` (Recursion
-Available) in the packet header -- a stub resolver querying a caching server
-will set the `RD` flag, and since the server allows such queries it will
-perform the lookup and send a reply with the `RA` flag set. This won't work for
-an Authoritative Server which will only reply to queries relating to the zones
-hosted, and as such will send an error response to any queries with the `RD`
-flag set.
+> **Note du traducteur — Deux métiers différents**
+>
+> - Une **zone** est la portion de l'annuaire DNS dont un serveur a la charge
+>   (par exemple, tout ce qui se termine par `google.com`).
+> - Le **serveur faisant autorité** détient le registre original de sa zone,
+>   comme le service du cadastre détient le plan officiel de sa commune : il ne
+>   répond que sur son territoire, mais sa réponse fait foi.
+> - Le **serveur cache** (ou résolveur récursif) est l'intermédiaire qui va
+>   chercher l'information pour vous auprès des services compétents, puis en
+>   garde une copie pendant la durée du TTL pour répondre plus vite la fois
+>   suivante.
+> - **DHCP** est le protocole qui configure automatiquement votre ordinateur
+>   lorsqu'il se connecte à un réseau (adresse IP, serveur DNS à utiliser…).
 
-Don't take my word for it, though! Let's verify that this is the case. First
-off, let's use `8.8.8.8` for looking up *yahoo.com*:
+Strictement parlant, rien n'empêche un serveur de faire les deux, mais en
+pratique, ces deux rôles sont généralement exclusifs l'un de l'autre. Cela
+explique aussi l'importance des drapeaux `RD` (Recursion Desired) et `RA`
+(Recursion Available) dans l'en-tête du paquet : un résolveur minimal qui
+interroge un serveur cache active le drapeau `RD`, et comme le serveur accepte
+ce type de requête, il effectue la recherche et envoie une réponse avec le
+drapeau `RA` activé. Cela ne fonctionne pas avec un serveur faisant autorité,
+qui ne répond qu'aux requêtes portant sur les zones qu'il héberge et renvoie donc
+une réponse d'erreur à toute requête dont le drapeau `RD` est activé.
+
+> **N.d.T.** — Les exemples qui suivent nuancent cette dernière phrase : un
+> serveur faisant autorité refuse les requêtes portant sur des zones qu'il
+> n'héberge pas, mais il répond normalement pour ses propres zones, même si
+> `RD` est activé ; il se contente alors de ne pas activer `RA`.
+
+Mais ne me croyez pas sur parole : vérifions-le ! Commençons par utiliser
+`8.8.8.8` pour rechercher *yahoo.com* :
+
+> **N.d.T.** — Dans la commande `dig @8.8.8.8 yahoo.com`, la partie `@8.8.8.8`
+> désigne le serveur à interroger. Les lignes `OPT PSEUDOSECTION` et `EDNS`
+> concernent l'extension eDNS évoquée au chapitre 1 ; on peut les ignorer.
 
 ```text
 # dig @8.8.8.8 yahoo.com
@@ -53,8 +78,8 @@ yahoo.com.		1051	IN	A	206.190.36.45
 ;; MSG SIZE  rcvd: 86
 ```
 
-This works as expected. Now let's try sending the same query to one of the
-servers hosting the *google.com* zone:
+Cela fonctionne comme prévu. Essayons maintenant d'envoyer la même requête à
+l'un des serveurs qui hébergent la zone *google.com* :
 
 ```text
 # dig @ns1.google.com yahoo.com
@@ -76,9 +101,11 @@ servers hosting the *google.com* zone:
 ;; MSG SIZE  rcvd: 27
 ```
 
-Notice how the status of the response says `REFUSED`! `dig` also warns us that
-while the `RD` flag was set in the query, the server didn't set the `RA` flag in the
-response. We can still use the same server for *google.com*, however:
+Remarquez que le statut de la réponse indique `REFUSED` (refusé) ! `dig` nous
+avertit aussi que, si le drapeau `RD` était bien activé dans la requête, le
+serveur n'a pas activé le drapeau `RA` dans la réponse (*recursion requested but
+not available* : « récursion demandée mais non disponible »). Nous pouvons
+toutefois utiliser ce même serveur pour *google.com* :
 
 ```text
 dig @ns1.google.com google.com                                                                                                                                                                                                                                 <<<
@@ -103,9 +130,9 @@ google.com.		300	IN	A	216.58.211.142
 ;; MSG SIZE  rcvd: 44
 ```
 
-No error this time -- however, `dig` still warns us that recursion is
-unavailable. We can explicitly unset it using `+norecurse` which gets rid of
-the warning:
+Pas d'erreur cette fois ; `dig` nous avertit cependant toujours que la récursion
+n'est pas disponible. Nous pouvons désactiver explicitement la demande de
+récursion avec `+norecurse`, ce qui fait disparaître l'avertissement :
 
 ```text
 # dig +norecurse @ns1.google.com google.com
@@ -129,23 +156,32 @@ google.com.		300	IN	A	216.58.211.142
 ;; MSG SIZE  rcvd: 44
 ```
 
-This final query is the type of query that we'd expect to see a caching server
-send as part of recursively resolving the name.
+Cette dernière requête est exactement le type de requête qu'un serveur cache est
+censé envoyer lorsqu'il résout un nom de manière récursive.
 
-For our first foray into writing our own server, we'll do something even
-simpler by implementing a server that simply forwards queries to another
-caching server, i.e. a "DNS proxy server". Having already done most of the hard
-work, it's a rather quick effort!
+> **N.d.T.** — Remarquez le drapeau `aa` (*Authoritative Answer*) dans les deux
+> dernières réponses : le serveur signale que sa réponse fait autorité, puisque
+> `google.com` fait partie de sa zone.
 
-### Separating lookup into a separate function
+Pour notre première incursion dans l'écriture de notre propre serveur, nous
+ferons quelque chose d'encore plus simple : un serveur qui se contente de
+transmettre les requêtes à un autre serveur cache, autrement dit un « serveur
+mandataire DNS » (*DNS proxy server*). Comme nous avons déjà fait le plus dur,
+ce sera plutôt rapide !
 
-We'll start out by doing some quick refactoring, moving our lookup code into
-a separate function. This is for the most part the same code as we had in our
-`main` function in the previous chapter.
+> **N.d.T.** — Notre serveur jouera donc le rôle d'un relais : il reçoit une
+> question, la retransmet telle quelle à Google (`8.8.8.8`), puis renvoie la
+> réponse obtenue à celui qui l'a interrogé.
+
+### Isoler la recherche dans une fonction séparée
+
+Nous commençons par un petit remaniement (*refactoring*) : nous déplaçons notre
+code de recherche dans une fonction séparée. C'est pour l'essentiel le même code
+que celui de notre fonction `main` du chapitre précédent.
 
 ```rust
 fn lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
-    // Forward queries to Google's public DNS
+    // Transmet les requêtes au DNS public de Google
     let server = ("8.8.8.8", 53);
 
     let socket = UdpSocket::bind(("0.0.0.0", 43210))?;
@@ -171,43 +207,49 @@ fn lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
 
 ```
 
-### Implementing our first server
+> **N.d.T.** — `lookup` (« recherche ») prend en entrée le nom et le type
+> recherchés, et renvoie le paquet de réponse (`Result<DnsPacket>` : soit un
+> paquet, soit une erreur).
 
-Now we'll write our server code. First, we need get some things in order.
+### Implémenter notre premier serveur
+
+Écrivons maintenant le code de notre serveur. Il faut d'abord mettre quelques
+éléments en place.
 
 ```rust
-/// Handle a single incoming packet
+/// Traite un seul paquet entrant
 fn handle_query(socket: &UdpSocket) -> Result<()> {
-    // With a socket ready, we can go ahead and read a packet. This will
-    // block until one is received.
+    // Le socket étant prêt, on peut lire un paquet. Cet appel est bloquant : le
+    // programme attend jusqu'à ce qu'un paquet arrive.
     let mut req_buffer = BytePacketBuffer::new();
 
-    // The `recv_from` function will write the data into the provided buffer,
-    // and return the length of the data read as well as the source address.
-    // We're not interested in the length, but we need to keep track of the
-    // source in order to send our reply later on.
+    // La fonction `recv_from` écrit les données dans le tampon fourni et
+    // renvoie la longueur des données lues ainsi que l'adresse de l'expéditeur.
+    // La longueur ne nous intéresse pas, mais il faut conserver l'adresse de
+    // l'expéditeur pour pouvoir lui répondre ensuite.
     let (_, src) = socket.recv_from(&mut req_buffer.buf)?;
 
-    // Next, `DnsPacket::from_buffer` is used to parse the raw bytes into
-    // a `DnsPacket`.
+    // Ensuite, `DnsPacket::from_buffer` sert à convertir les octets bruts en un
+    // `DnsPacket`.
     let mut request = DnsPacket::from_buffer(&mut req_buffer)?;
 
-    // Create and initialize the response packet
+    // Crée et initialise le paquet de réponse
     let mut packet = DnsPacket::new();
     packet.header.id = request.header.id;
     packet.header.recursion_desired = true;
     packet.header.recursion_available = true;
     packet.header.response = true;
 
-    // In the normal case, exactly one question is present
+    // Dans le cas normal, le paquet contient exactement une question
     if let Some(question) = request.questions.pop() {
         println!("Received query: {:?}", question);
 
-        // Since all is set up and as expected, the query can be forwarded to the
-        // target server. There's always the possibility that the query will
-        // fail, in which case the `SERVFAIL` response code is set to indicate
-        // as much to the client. If rather everything goes as planned, the
-        // question and response records as copied into our response packet.
+        // Tout étant en place et conforme, la requête peut être transmise au
+        // serveur cible. Il est toujours possible que la requête échoue : dans
+        // ce cas, on renvoie le code de réponse `SERVFAIL` pour en informer le
+        // client. Si au contraire tout se passe comme prévu, la question et les
+        // enregistrements de réponse sont recopiés dans notre paquet de
+        // réponse.
         if let Ok(result) = lookup(&question.name, question.qtype) {
             packet.questions.push(question);
             packet.header.rescode = result.header.rescode;
@@ -228,14 +270,14 @@ fn handle_query(socket: &UdpSocket) -> Result<()> {
             packet.header.rescode = ResultCode::SERVFAIL;
         }
     }
-    // Being mindful of how unreliable input data from arbitrary senders can be, we
-    // need make sure that a question is actually present. If not, we return `FORMERR`
-    // to indicate that the sender made something wrong.
+    // Les données reçues d'expéditeurs quelconques étant peu fiables, il faut
+    // vérifier qu'une question est bien présente. Sinon, on renvoie `FORMERR`
+    // pour signaler que l'expéditeur a envoyé une requête mal formée.
     else {
         packet.header.rescode = ResultCode::FORMERR;
     }
 
-    // The only thing remaining is to encode our response and send it off!
+    // Il ne reste plus qu'à encoder notre réponse et à l'envoyer !
     let mut res_buffer = BytePacketBuffer::new();
     packet.write(&mut res_buffer)?;
 
@@ -248,11 +290,11 @@ fn handle_query(socket: &UdpSocket) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    // Bind an UDP socket on port 2053
+    // Ouvre un socket UDP sur le port 2053
     let socket = UdpSocket::bind(("0.0.0.0", 2053))?;
 
-    // For now, queries are handled sequentially, so an infinite loop for servicing
-    // requests is initiated.
+    // Pour l'instant, les requêtes sont traitées l'une après l'autre : on lance
+    // donc une boucle infinie qui les sert successivement.
     loop {
         match handle_query(&socket) {
             Ok(_) => {},
@@ -262,13 +304,52 @@ fn main() -> Result<()> {
 }
 ```
 
-The match idiom for error handling is used again and again here, since we want to avoid
-terminating our request loop at all cost. It's a bit verbose, and normally we'd
-like to use `try!` instead. Unfortunately that's unavailable to us here, since
-we're in the `main` function which doesn't return a `Result`.
+> **Note du traducteur — Le fonctionnement du serveur en résumé**
+>
+> 1. `main` ouvre un socket sur le port 2053, puis tourne en boucle (`loop`)
+>    indéfiniment, en appelant `handle_query` pour chaque paquet reçu.
+> 2. `handle_query` attend un paquet, le décode, prépare un paquet de réponse
+>    portant le même identifiant, puis :
+>    - s'il y a une question, la transmet à Google via `lookup` et recopie la
+>      réponse obtenue (ou renvoie `SERVFAIL` en cas d'échec) ;
+>    - s'il n'y a pas de question, renvoie `FORMERR` (requête mal formée).
+> 3. La réponse est encodée puis renvoyée à l'expéditeur (`src`).
+>
+> `if let Some(question) = ...` signifie « s'il y a bien une question, alors… » ;
+> `pop()` retire et renvoie le dernier élément d'une liste. Les messages
+> *Received query*, *Answer*, *Authority*, *Resource* et *An error occurred*
+> signifient respectivement « requête reçue », « réponse », « autorité »,
+> « ressource (additionnelle) » et « une erreur s'est produite ».
 
-All done! Let's try it! We start our server in one terminal, and use `dig` to
-perform a lookup in a second terminal.
+L'idiome `match` pour la gestion des erreurs est utilisé à répétition ici, car
+nous voulons à tout prix éviter d'interrompre notre boucle de traitement des
+requêtes. C'est un peu verbeux, et nous aimerions normalement utiliser `try!` à
+la place. Malheureusement, ce n'est pas possible ici, puisque nous sommes dans
+la fonction `main`, qui ne renvoie pas de `Result`.
+
+> **N.d.T.** — Ce paragraphe date de la première version du guide (2016) et ne
+> correspond plus exactement au code. `try!` est l'ancêtre de l'opérateur `?`
+> présenté au chapitre 1, et la fonction `main` actuelle renvoie bien un
+> `Result`. La vraie raison d'utiliser `match` est la suivante : avec `?`, la
+> première erreur (par exemple un paquet malformé envoyé par n'importe qui)
+> ferait s'arrêter tout le serveur ; avec `match`, l'erreur est simplement
+> affichée (`eprintln!`) et la boucle continue de servir les requêtes
+> suivantes.
+
+Terminé ! Essayons-le ! Nous lançons notre serveur dans un terminal et utilisons
+`dig` pour effectuer une recherche dans un second terminal.
+
+> **Note du traducteur — Lancer cet exemple**
+>
+> - Dans un premier terminal : `cargo run --example sample4`. Le programme
+>   n'affiche rien et attend des requêtes : c'est normal.
+> - Dans un second terminal : `dig @127.0.0.1 -p 2053 google.com`.
+>   `127.0.0.1` est l'adresse spéciale qui désigne « cette machine-ci », et
+>   `-p 2053` indique le port de notre serveur.
+> - Le serveur utilise le port 2053 plutôt que le port DNS standard (53),
+>   probablement parce que sur la plupart des systèmes, notamment Linux, ouvrir
+>   un port inférieur à 1024 nécessite des droits d'administrateur.
+> - Pour arrêter le serveur : Ctrl+C dans le premier terminal.
 
 ```text
 # dig @127.0.0.1 -p 2053 google.com
@@ -292,15 +373,16 @@ google.com.		68	IN	A	216.58.211.142
 ;; MSG SIZE  rcvd: 54
 ```
 
-Looking at our server terminal we see:
+Dans le terminal de notre serveur, on voit :
 
 ```text
 Received query: DnsQuestion { name: "google.com", qtype: A }
 Answer: A { domain: "google.com", addr: 216.58.211.142, ttl: 96 }
 ```
 
-Success! In less than 800 lines of code, we've built a DNS server able to respond to
-queries with several different record types!
+Réussi ! En moins de 800 lignes de code, nous avons construit un serveur DNS
+capable de répondre à des requêtes portant sur plusieurs types d'enregistrements
+différents !
 
-In the next chapter, we'll get rid of our dependence on an existing resolver:
-[Chapter 5 - Recursive Resolve](/chapter5.md)
+Au chapitre suivant, nous nous affranchirons de notre dépendance à un résolveur
+existant : [Chapitre 5 - Résolution récursive](chapter5.md)
